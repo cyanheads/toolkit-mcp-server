@@ -17,6 +17,8 @@ The Model Context Protocol (MCP) enables communication between:
 - **Servers**: Tools and resources for task management and automation
 - **LLM Agents**: AI models that leverage the server's capabilities
 
+<a href="https://glama.ai/mcp/servers/wl3y2xyi4u"><img width="380" height="200" src="https://glama.ai/mcp/servers/wl3y2xyi4u/badge" alt="Toolkit Server MCP server" /></a>
+
 ## Table of Contents
 
 - [Features](#features)
