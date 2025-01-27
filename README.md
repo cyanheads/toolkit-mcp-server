@@ -6,6 +6,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Status](https://img.shields.io/badge/Status-Stable-blue.svg)]()
 [![GitHub](https://img.shields.io/github/stars/cyanheads/toolkit-mcp-server?style=social)](https://github.com/cyanheads/toolkit-mcp-server)
+[![smithery badge](https://smithery.ai/badge/@cyanheads/toolkit-mcp-server)](https://smithery.ai/server/@cyanheads/toolkit-mcp-server)
 
 A Model Context Protocol server providing LLM Agents with system utilities and tools, including IP geolocation, network diagnostics, system monitoring, cryptographic operations, and QR code generation.
 
@@ -54,6 +55,15 @@ The Model Context Protocol (MCP) enables communication between:
 
 ## Installation
 
+### Installing via Smithery
+
+To install Toolkit MCP Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@cyanheads/toolkit-mcp-server):
+
+```bash
+npx -y @smithery/cli install @cyanheads/toolkit-mcp-server --client claude
+```
+
+### Installing manually
 ```bash
 # Using npm (recommended)
 npm install @cyanheads/toolkit-mcp-server
