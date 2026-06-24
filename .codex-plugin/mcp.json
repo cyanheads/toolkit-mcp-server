@@ -1,0 +1,9 @@
+{
+  "toolkit-mcp-server": {
+    "command": "npx",
+    "args": ["-y", "toolkit-mcp-server"],
+    "env": {
+      "MCP_TRANSPORT_TYPE": "stdio"
+    }
+  }
+}
