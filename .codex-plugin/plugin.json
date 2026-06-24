@@ -1,25 +1,25 @@
 {
   "name": "toolkit-mcp-server",
   "version": "0.1.0",
-  "description": "",
+  "description": "Fast developer utilities — random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics.",
   "author": {
-    "name": "",
-    "email": "",
-    "url": ""
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/toolkit-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/toolkit-mcp-server",
   "license": "Apache-2.0",
   "keywords": ["mcp", "mcp-server", "model-context-protocol"],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "toolkit-mcp-server",
-    "shortDescription": "",
-    "longDescription": "",
-    "developerName": "",
-    "category": "",
+    "shortDescription": "Random IDs, QR codes, IP geolocation, hashing, and encoding utilities.",
+    "longDescription": "A grab-bag of fast developer utilities: cryptographically-random ID generation (UUIDv4/v7, ULID), QR code generation (SVG/PNG/terminal), IP geolocation, cryptographic hashing with constant-time compare, and base64/hex/URL encoding. Two host-probing tools (network diagnostics and system info) are gated off by default, fail-closed, so a hosted instance carries no SSRF or info-disclosure surface.",
+    "developerName": "cyanheads",
+    "category": "tools",
     "capabilities": ["Read"],
-    "websiteURL": "",
+    "websiteURL": "https://github.com/cyanheads/toolkit-mcp-server",
     "defaultPrompt": []
   }
 }

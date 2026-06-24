@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "toolkit-mcp-server",
-  "description": "",
+  "name": "io.github.cyanheads/toolkit-mcp-server",
+  "description": "Developer utilities: random IDs, QR codes, IP geolocation, hashing, encoding, and gated diagnostics.",
   "repository": {
-    "url": "",
+    "url": "https://github.com/cyanheads/toolkit-mcp-server",
     "source": "github"
   },
   "version": "0.1.0",
@@ -31,6 +31,62 @@
           "format": "string",
           "isRequired": false,
           "default": "info"
+        },
+        {
+          "name": "TOOLKIT_ENABLE_NET_DIAGNOSTICS",
+          "description": "Register the gated toolkit_check_network tool. Off by default — leave off for hosted/shared deployments.",
+          "format": "string",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "TOOLKIT_ENABLE_SYSTEM_INFO",
+          "description": "Register the gated toolkit_check_system tool. Off by default — only meaningful on a local deployment.",
+          "format": "string",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "TOOLKIT_ALLOW_PRIVATE_NETWORK",
+          "description": "With network diagnostics enabled, permit private/reserved/loopback targets. The second explicit gate; off by default.",
+          "format": "string",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "TOOLKIT_GEO_PROVIDER",
+          "description": "IP-geolocation provider id. Default 'ip-api' is the keyless free tier.",
+          "format": "string",
+          "isRequired": false,
+          "default": "ip-api"
+        },
+        {
+          "name": "TOOLKIT_GEO_API_KEY",
+          "description": "API key for the geolocation provider, if it requires one. The default ip-api tier is keyless.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "TOOLKIT_GEO_BASE_URL",
+          "description": "Base URL for the geolocation provider. Default is the keyless ip-api endpoint.",
+          "format": "string",
+          "isRequired": false,
+          "default": "http://ip-api.com"
+        },
+        {
+          "name": "TOOLKIT_GEO_CACHE_TTL_SECONDS",
+          "description": "Geolocation cache TTL in seconds. Geolocation is stable, so repeats are cached.",
+          "format": "string",
+          "isRequired": false,
+          "default": "3600"
+        },
+        {
+          "name": "TOOLKIT_GEO_RATE_LIMIT_PER_MIN",
+          "description": "Max geolocation requests per minute before backoff slows. Default 45 matches the ip-api free tier.",
+          "format": "string",
+          "isRequired": false,
+          "default": "45"
         }
       ],
       "transport": {
@@ -88,6 +144,62 @@
           "format": "string",
           "isRequired": false,
           "default": "info"
+        },
+        {
+          "name": "TOOLKIT_ENABLE_NET_DIAGNOSTICS",
+          "description": "Register the gated toolkit_check_network tool. Off by default — leave off for hosted/shared deployments.",
+          "format": "string",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "TOOLKIT_ENABLE_SYSTEM_INFO",
+          "description": "Register the gated toolkit_check_system tool. Off by default — only meaningful on a local deployment.",
+          "format": "string",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "TOOLKIT_ALLOW_PRIVATE_NETWORK",
+          "description": "With network diagnostics enabled, permit private/reserved/loopback targets. The second explicit gate; off by default.",
+          "format": "string",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "TOOLKIT_GEO_PROVIDER",
+          "description": "IP-geolocation provider id. Default 'ip-api' is the keyless free tier.",
+          "format": "string",
+          "isRequired": false,
+          "default": "ip-api"
+        },
+        {
+          "name": "TOOLKIT_GEO_API_KEY",
+          "description": "API key for the geolocation provider, if it requires one. The default ip-api tier is keyless.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "TOOLKIT_GEO_BASE_URL",
+          "description": "Base URL for the geolocation provider. Default is the keyless ip-api endpoint.",
+          "format": "string",
+          "isRequired": false,
+          "default": "http://ip-api.com"
+        },
+        {
+          "name": "TOOLKIT_GEO_CACHE_TTL_SECONDS",
+          "description": "Geolocation cache TTL in seconds. Geolocation is stable, so repeats are cached.",
+          "format": "string",
+          "isRequired": false,
+          "default": "3600"
+        },
+        {
+          "name": "TOOLKIT_GEO_RATE_LIMIT_PER_MIN",
+          "description": "Max geolocation requests per minute before backoff slows. Default 45 matches the ip-api free tier.",
+          "format": "string",
+          "isRequired": false,
+          "default": "45"
         }
       ],
       "transport": {

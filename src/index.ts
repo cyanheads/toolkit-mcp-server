@@ -1,23 +1,51 @@
 #!/usr/bin/env node
 /**
  * @fileoverview toolkit-mcp-server MCP server entry point.
+ *
+ * Fail-closed assembly: the five always-on utility tools register on every
+ * deployment with zero configuration; the two host-probing tools
+ * (toolkit_check_network, toolkit_check_system) are pushed onto the catalog
+ * ONLY when their enable-flag is set, so a hosted instance exposes no SSRF or
+ * info-disclosure surface — the gated tools are absent from tools/list, not
+ * present-and-erroring.
  * @module index
  */
 
-import { createApp } from '@cyanheads/mcp-ts-core';
-import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
-import { echoAppTool } from './mcp-server/tools/definitions/echo-app.app-tool.js';
-import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
-import { echoAppUiResource } from './mcp-server/resources/definitions/echo-app-ui.app-resource.js';
-import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
+import { type AnyToolDefinition, createApp } from '@cyanheads/mcp-ts-core';
+import { getServerConfig } from './config/server-config.js';
+import { checkNetworkTool } from './mcp-server/tools/definitions/check-network.tool.js';
+import { checkSystemTool } from './mcp-server/tools/definitions/check-system.tool.js';
+import { encodeValueTool } from './mcp-server/tools/definitions/encode-value.tool.js';
+import { generateIdTool } from './mcp-server/tools/definitions/generate-id.tool.js';
+import { generateQrTool } from './mcp-server/tools/definitions/generate-qr.tool.js';
+import { geolocateIpTool } from './mcp-server/tools/definitions/geolocate-ip.tool.js';
+import { hashValueTool } from './mcp-server/tools/definitions/hash-value.tool.js';
+import { initGeoService } from './services/geo/geo-service.js';
+import { initNetDiagService } from './services/network/net-diag-service.js';
+
+const serverConfig = getServerConfig();
+
+/** Always-on: pure compute + the SSRF-free geolocation lookup. Zero config. */
+const tools: AnyToolDefinition[] = [
+  hashValueTool,
+  generateIdTool,
+  generateQrTool,
+  encodeValueTool,
+  geolocateIpTool,
+];
+
+// Gated tools — registered only behind their enable-flag (fail-closed).
+if (serverConfig.enableNetDiagnostics) tools.push(checkNetworkTool);
+if (serverConfig.enableSystemInfo) tools.push(checkSystemTool);
 
 await createApp({
   name: 'toolkit-mcp-server',
   title: 'toolkit-mcp-server',
-  tools: [echoTool, echoAppTool],
-  resources: [echoResource, echoAppUiResource],
-  prompts: [echoPrompt],
-  // instructions: 'Server-level orientation forwarded to the model on every initialize.\n' +
-  //   '- Use shortcut `X` for the most common case\n' +
-  //   '- Tools require auth via the `inventory:read` scope',
+  tools,
+  setup() {
+    initGeoService();
+    if (serverConfig.enableNetDiagnostics) {
+      initNetDiagService();
+    }
+  },
 });

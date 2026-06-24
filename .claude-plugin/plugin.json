@@ -1,12 +1,12 @@
 {
   "name": "toolkit-mcp-server",
   "version": "0.1.0",
-  "description": "",
+  "description": "Fast developer utilities — random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics.",
   "author": {
-    "name": ""
+    "name": "cyanheads"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/toolkit-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/toolkit-mcp-server",
   "license": "Apache-2.0",
   "mcpServers": {
     "toolkit-mcp-server": {
