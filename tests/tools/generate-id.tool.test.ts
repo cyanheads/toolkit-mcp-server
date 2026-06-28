@@ -57,6 +57,20 @@ describe('toolkit_generate_id', () => {
     expect(new Set(result.ids).size).toBe(1000);
   });
 
+  it('uuid_v7 batches are monotonic — lexicographically sorted within a batch', async () => {
+    // A 1000-count batch mints almost entirely within one millisecond; the
+    // suffix increments so the ids array equals its lexicographically sorted copy.
+    const { ids } = await run({ type: 'uuid_v7', count: 1000 });
+    expect(ids).toEqual([...ids].sort());
+    expect(new Set(ids).size).toBe(1000);
+  });
+
+  it('ulid batches are monotonic — lexicographically sorted within a batch', async () => {
+    const { ids } = await run({ type: 'ulid', count: 1000 });
+    expect(ids).toEqual([...ids].sort());
+    expect(new Set(ids).size).toBe(1000);
+  });
+
   it.each([0, 1001, -1, 1.5])('rejects out-of-bounds count %d at the schema boundary', (count) => {
     expect(generateIdTool.input.safeParse({ type: 'ulid', count }).success).toBe(false);
   });

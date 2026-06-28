@@ -4,12 +4,16 @@
  * @module tests/tools/generate-qr.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import { generateQrTool } from '@/mcp-server/tools/definitions/generate-qr.tool.js';
 
 const run = (args: unknown) =>
-  generateQrTool.handler(generateQrTool.input.parse(args), createMockContext());
+  generateQrTool.handler(
+    generateQrTool.input.parse(args),
+    createMockContext({ errors: generateQrTool.errors }),
+  );
 
 const PNG_MAGIC = '89504e470d0a1a0a';
 
@@ -80,6 +84,26 @@ describe('toolkit_generate_qr', () => {
 
   it('accepts data exactly at the 2953-byte ceiling', () => {
     expect(generateQrTool.input.safeParse({ data: 'x'.repeat(2953) }).success).toBe(true);
+  });
+
+  it('encodes a max-length payload at level L (fits version 40)', async () => {
+    // 2953 bytes is exactly the byte-mode capacity of version 40 at level L.
+    const result = await run({ data: 'x'.repeat(2953), format: 'svg', errorCorrection: 'L' });
+    expect(result.version).toBe(40);
+  });
+
+  it('rejects over-capacity data with a typed data_too_large error, not an internal failure', async () => {
+    // 2953 bytes passes the schema and fits level L, but exceeds the ~2331-byte
+    // capacity at level M — caught and surfaced as a declared InvalidParams error
+    // instead of the raw qrcode "too big" internal error.
+    const error = await run({ data: 'x'.repeat(2953), errorCorrection: 'M' }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      data: { reason: 'data_too_large' },
+    });
+    expect((error as Error).message).not.toMatch(/too big/i);
   });
 
   it('output conforms to the declared schema', async () => {

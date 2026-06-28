@@ -6,6 +6,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import QRCode from 'qrcode';
 
 export const generateQrTool = tool('toolkit_generate_qr', {
@@ -19,7 +20,7 @@ export const generateQrTool = tool('toolkit_generate_qr', {
       .min(1)
       .max(2953)
       .describe(
-        'The text or URL to encode. Capped at 2953 bytes — the absolute QR capacity (version 40, level L).',
+        'The text or URL to encode. 2953 is the absolute ceiling (QR version 40, level L, byte mode); usable capacity drops at higher errorCorrection levels, so over-capacity data is rejected with a typed data_too_large error rather than a generic failure.',
       ),
     format: z
       .enum(['svg', 'png_base64', 'terminal'])
@@ -71,11 +72,34 @@ export const generateQrTool = tool('toolkit_generate_qr', {
       ),
   }),
 
+  errors: [
+    {
+      reason: 'data_too_large',
+      code: JsonRpcErrorCode.InvalidParams,
+      when: 'data exceeds the QR capacity for the chosen errorCorrection level and encoding mode.',
+      recovery: 'Shorten data, or lower errorCorrection (H→Q→M→L) to raise capacity, then retry.',
+    },
+  ],
+
   async handler(input, ctx) {
     const errorCorrectionLevel = input.errorCorrection;
-    // create() yields the chosen symbol version regardless of output format.
-    const symbol = QRCode.create(input.data, { errorCorrectionLevel });
-    const version = symbol.version;
+    // create() picks the symbol version and is the single chokepoint that
+    // rejects over-capacity data: the schema's 2953 cap is the level-L/byte-mode
+    // ceiling, so a payload valid for the schema can still exceed capacity at
+    // M/Q/H. Translate that library error into the typed contract reason.
+    let version: number;
+    try {
+      version = QRCode.create(input.data, { errorCorrectionLevel }).version;
+    } catch (err) {
+      if (err instanceof Error && /too big/i.test(err.message)) {
+        throw ctx.fail(
+          'data_too_large',
+          `data is ${input.data.length} characters, which exceeds the QR capacity at error-correction level ${input.errorCorrection}.`,
+          { ...ctx.recoveryFor('data_too_large') },
+        );
+      }
+      throw err;
+    }
     ctx.log.info('Generated QR', { format: input.format, version });
 
     if (input.format === 'svg') {

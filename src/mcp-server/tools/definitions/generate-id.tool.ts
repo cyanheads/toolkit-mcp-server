@@ -13,46 +13,89 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 /** Crockford base32 alphabet (excludes I, L, O, U) — the ULID encoding. */
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-/**
- * Generate a UUIDv7: 48-bit big-endian Unix-ms timestamp, version/variant bits,
- * 74 bits of CSPRNG randomness. Time-ordered, RFC 9562 layout.
- */
-function uuidV7(): string {
-  const bytes = randomBytes(16);
-  const ms = Date.now();
-  bytes[0] = (ms / 2 ** 40) & 0xff;
-  bytes[1] = (ms / 2 ** 32) & 0xff;
-  bytes[2] = (ms / 2 ** 24) & 0xff;
-  bytes[3] = (ms / 2 ** 16) & 0xff;
-  bytes[4] = (ms / 2 ** 8) & 0xff;
-  bytes[5] = ms & 0xff;
-  bytes[6] = (bytes[6]! & 0x0f) | 0x70; // version 7
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // variant 10
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+/** Draw `bits` of CSPRNG randomness as a BigInt. */
+function randomBigInt(bits: number): bigint {
+  const bytes = randomBytes(Math.ceil(bits / 8));
+  let value = 0n;
+  for (const b of bytes) value = (value << 8n) | BigInt(b);
+  return value & ((1n << BigInt(bits)) - 1n);
 }
 
 /**
- * Generate a ULID: 48-bit ms timestamp + 80 bits CSPRNG randomness, encoded as
- * 26 Crockford-base32 chars (10 time + 16 random). Lexicographically sortable.
+ * Mint a monotonic batch of `count` time-ordered identifiers. Within a single
+ * millisecond the random suffix is incremented (not redrawn), so the batch is
+ * strictly increasing and therefore lexicographically sorted by creation — the
+ * contract uuid_v7 and ulid advertise. `randBits` sizes the random suffix (74
+ * for UUIDv7, 80 for ULID); `encode` lays the timestamp + suffix into a string.
  */
-function ulid(): string {
-  let time = Date.now();
-  const timeChars: string[] = [];
-  for (let i = 9; i >= 0; i--) {
-    timeChars[i] = CROCKFORD[time % 32]!;
-    time = Math.floor(time / 32);
+function monotonicBatch(
+  count: number,
+  randBits: number,
+  encode: (ms: bigint, rand: bigint) => string,
+): string[] {
+  const randMask = (1n << BigInt(randBits)) - 1n;
+  const ids: string[] = [];
+  let lastMs = -1n;
+  let lastRand = 0n;
+  for (let i = 0; i < count; i++) {
+    let ms = BigInt(Date.now());
+    let rand: bigint;
+    if (ms > lastMs) {
+      rand = randomBigInt(randBits);
+    } else {
+      // Same (or backward) clock reading: hold the highest ms seen and bump the
+      // suffix, so ordering is preserved without waiting on the wall clock.
+      ms = lastMs;
+      rand = (lastRand + 1n) & randMask;
+      if (rand === 0n) {
+        // Suffix wrapped within one ms (unreachable for count ≤ 1000) — step the
+        // timestamp and redraw rather than emit a colliding/out-of-order id.
+        ms = lastMs + 1n;
+        rand = randomBigInt(randBits);
+      }
+    }
+    lastMs = ms;
+    lastRand = rand;
+    ids.push(encode(ms, rand));
   }
-  // 16 random chars = 80 bits. Draw a fresh byte per char and mask to 5 bits.
-  const rand = randomBytes(16);
-  const randChars = Array.from(rand, (b) => CROCKFORD[b & 0x1f]!);
-  return timeChars.join('') + randChars.join('');
+  return ids;
+}
+
+/** Encode the low `length` Crockford-base32 chars of `value`, most-significant first. */
+function toCrockford(value: bigint, length: number): string {
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out = CROCKFORD[Number(value & 31n)] + out;
+    value >>= 5n;
+  }
+  return out;
+}
+
+/**
+ * Lay out a UUIDv7 (RFC 9562): 48-bit ms timestamp, version 7, 12-bit rand_a,
+ * variant 0b10, 62-bit rand_b. `rand` supplies rand_a (its top 12 bits) and
+ * rand_b (its low 62 bits).
+ */
+function encodeUuidV7(ms: bigint, rand: bigint): string {
+  const value =
+    (ms << 80n) |
+    (0x7n << 76n) |
+    ((rand >> 62n) << 64n) | // rand_a — top 12 bits of the 74-bit suffix
+    (0b10n << 62n) |
+    (rand & ((1n << 62n) - 1n)); // rand_b — low 62 bits
+  const hex = value.toString(16).padStart(32, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Encode a ULID: 48-bit ms timestamp (10 chars) + 80-bit suffix (16 chars), Crockford base32. */
+function encodeUlid(ms: bigint, rand: bigint): string {
+  return toCrockford(ms, 10) + toCrockford(rand, 16);
 }
 
 export const generateIdTool = tool('toolkit_generate_id', {
   title: 'toolkit-mcp-server: generate id',
   description:
-    'Mint cryptographically-random identifiers using the platform CSPRNG — the correct source for IDs that must be unpredictable, unlike model-generated values. type selects the format: uuid_v4 (random, the default), uuid_v7 (time-ordered, sortable by creation), or ulid (26-char Crockford-base32, lexicographically sortable). Set count to mint a batch in one call (up to 1000); the returned ids array always contains exactly count values and is never truncated. IDs from this tool feed into toolkit_generate_qr (pass ids[0] as data) to create a scannable code.',
+    'Mint cryptographically-random identifiers using the platform CSPRNG — the correct source for IDs that must be unpredictable, unlike model-generated values. type selects the format: uuid_v4 (random, the default), uuid_v7 (time-ordered, sortable by creation), or ulid (26-char Crockford-base32, lexicographically sortable). Set count to mint a batch in one call (up to 1000); the returned ids array always contains exactly count values and is never truncated. For uuid_v7 and ulid, a batch is monotonic — strictly increasing even within the same millisecond — so the ids array stays in sorted creation order. IDs from this tool feed into toolkit_generate_qr (pass ids[0] as data) to create a scannable code.',
   // Deliberately NOT read-only: each call produces fresh, non-reproducible
   // entropy. readOnlyHint:false / idempotentHint:false prevent a client from
   // treating it as a side-effect-free, auto-approvable, cacheable call.
@@ -76,13 +119,23 @@ export const generateIdTool = tool('toolkit_generate_id', {
     type: z.enum(['uuid_v4', 'uuid_v7', 'ulid']).describe('The identifier format that was minted.'),
     ids: z
       .array(z.string().describe('A single minted identifier.'))
-      .describe('The minted identifiers — exactly count of them, in mint order.'),
+      .describe(
+        'The minted identifiers — exactly count of them, in mint order; for uuid_v7 and ulid that order is strictly increasing (sorted by creation).',
+      ),
     count: z.number().describe('The number of identifiers minted (equals the requested count).'),
   }),
 
   handler(input, ctx) {
-    const mint = input.type === 'uuid_v4' ? randomUUID : input.type === 'uuid_v7' ? uuidV7 : ulid;
-    const ids = Array.from({ length: input.count }, () => mint());
+    // uuid_v4 has no ordering contract → independent draws. uuid_v7/ulid run
+    // through a monotonic batch so the returned array sorts by creation.
+    const ids =
+      input.type === 'uuid_v4'
+        ? Array.from({ length: input.count }, () => randomUUID())
+        : monotonicBatch(
+            input.count,
+            input.type === 'uuid_v7' ? 74 : 80,
+            input.type === 'uuid_v7' ? encodeUuidV7 : encodeUlid,
+          );
     ctx.log.info('Generated ids', { type: input.type, count: input.count });
     return { type: input.type, ids, count: ids.length };
   },
