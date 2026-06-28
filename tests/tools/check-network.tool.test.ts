@@ -9,6 +9,7 @@
  * @module tests/tools/check-network.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
@@ -38,7 +39,10 @@ describe('toolkit_check_network — gate + validation', () => {
     initNetDiagService();
     await expect(
       run({ mode: 'connectivity', target: '169.254.169.254', port: 80 }),
-    ).rejects.toMatchObject({ data: { reason: 'private_target_blocked' } });
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'private_target_blocked' },
+    });
   });
 
   it('blocks an RFC-1918 target for ping when the gate is off', async () => {
@@ -50,12 +54,25 @@ describe('toolkit_check_network — gate + validation', () => {
     });
   });
 
+  it('blocks a TEST-NET (IANA documentation) target when the gate is off', async () => {
+    // TEST-NET-3 (203.0.113.0/24) classifies as reserved, so the gate rejects it
+    // like any other private/reserved target when ALLOW_PRIVATE_NETWORK is off.
+    vi.stubEnv('TOOLKIT_ALLOW_PRIVATE_NETWORK', 'false');
+    resetServerConfig();
+    initNetDiagService();
+    await expect(run({ mode: 'ping', target: '203.0.113.7' })).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'private_target_blocked' },
+    });
+  });
+
   it('rejects a missing target for a target-bearing mode (before any probe)', async () => {
     await expect(run({ mode: 'ping' })).rejects.toThrow(/target is required/);
   });
 
   it('rejects connectivity without a port (before opening a socket)', async () => {
-    // Gate-on so a public raw IP passes guardTarget synchronously (no DNS), then
+    // Gate-on so a raw IP passes guardTarget synchronously (no DNS) — 203.0.113.7
+    // is now TEST-NET reserved but ALLOW_PRIVATE_NETWORK permits it — then
     // connectivity() throws on the missing port before any connect() is attempted.
     vi.stubEnv('TOOLKIT_ALLOW_PRIVATE_NETWORK', 'true');
     resetServerConfig();

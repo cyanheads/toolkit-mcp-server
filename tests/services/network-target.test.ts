@@ -21,10 +21,21 @@ describe('isPrivateOrReservedIp', () => {
     '0.0.0.0', // "this network"
     '100.64.0.1', // CGNAT /10
     '224.0.0.1', // multicast
+    '255.255.255.255', // reserved 240.0.0.0/4
+    '192.0.0.1', // IETF protocol assignments 192.0.0.0/24
+    '192.0.2.1', // TEST-NET-1 192.0.2.0/24
+    '198.51.100.1', // TEST-NET-2 198.51.100.0/24
+    '203.0.113.7', // TEST-NET-3 203.0.113.0/24 — RFC-5737 documentation, no public geolocation
+    '198.18.0.1', // benchmarking 198.18.0.0/15 lower bound
+    '198.19.255.255', // benchmarking 198.18.0.0/15 upper bound
     '::1', // IPv6 loopback
     'fe80::1', // IPv6 link-local
     'fd00::1', // IPv6 unique-local
+    '2001:db8::1', // IPv6 documentation 2001:db8::/32
+    '2001:db8:1234:5678::1', // IPv6 documentation, deeper prefix (not just ::1)
+    '2001:2::1', // IPv6 benchmarking 2001:2::/48
     '::ffff:10.0.0.1', // IPv4-mapped IPv6 of a private addr
+    '::ffff:203.0.113.7', // IPv4-mapped IPv6 of a TEST-NET addr
   ])('classifies %s as private/reserved', (ip) => {
     expect(isPrivateOrReservedIp(ip)).toBe(true);
   });
@@ -32,10 +43,11 @@ describe('isPrivateOrReservedIp', () => {
   it.each([
     '8.8.8.8',
     '1.1.1.1',
-    '203.0.113.7',
     '172.32.0.1', // just outside the /12
     '172.15.255.255', // just below the /12
     '100.63.255.255', // just below CGNAT
+    '198.20.0.1', // just above benchmarking 198.18.0.0/15
+    '203.0.114.1', // just outside TEST-NET-3 203.0.113.0/24
     '2001:4860:4860::8888', // public IPv6
   ])('classifies %s as public', (ip) => {
     expect(isPrivateOrReservedIp(ip)).toBe(false);

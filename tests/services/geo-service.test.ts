@@ -182,7 +182,10 @@ describe('GeoService', () => {
   });
 
   it('throws private_target when the provider returns a fail envelope', async () => {
-    // A public-looking IP the provider itself classifies as unlocatable.
+    // A routable public IP (passes the private-range guard) that the provider
+    // itself classifies as unlocatable via a fail envelope. The conventional
+    // documentation ranges (203.0.113.0/24 etc.) are now caught by the guard
+    // before any upstream call, so this path needs a genuinely public address.
     vi.stubGlobal(
       'fetch',
       vi
@@ -191,7 +194,7 @@ describe('GeoService', () => {
           jsonResponse({ status: 'fail', message: 'reserved range', query: '0.0.0.1' }),
         ),
     );
-    const error = await lookup('203.0.113.7').catch((e: unknown) => e);
+    const error = await lookup('45.33.32.156').catch((e: unknown) => e);
     expect(error).toMatchObject({ data: { reason: 'private_target', retryable: false } });
     // The target passed the private-range guard, so it is a public-format
     // address — the recovery hint must NOT tell the caller to pass a public IP.

@@ -55,13 +55,13 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
   errors: [
     {
       reason: 'unresolvable_host',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'A hostname target failed DNS resolution.',
       recovery: "Hostname didn't resolve. Verify it, or pass an IP address directly.",
     },
     {
       reason: 'private_target',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'The target resolves to a private/reserved IP with no public geolocation.',
       recovery: 'Private/reserved addresses have no public geolocation. Pass a public IP address.',
     },

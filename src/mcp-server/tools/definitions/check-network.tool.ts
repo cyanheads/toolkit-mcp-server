@@ -93,7 +93,7 @@ export const checkNetworkTool = tool('toolkit_check_network', {
   errors: [
     {
       reason: 'private_target_blocked',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'The target is private/reserved/loopback/link-local and TOOLKIT_ALLOW_PRIVATE_NETWORK is off.',
       recovery:
         'This target is a private/reserved address. Set TOOLKIT_ALLOW_PRIVATE_NETWORK=true to permit local-network diagnostics.',

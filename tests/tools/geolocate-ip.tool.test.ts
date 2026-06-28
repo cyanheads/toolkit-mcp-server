@@ -7,6 +7,7 @@
  * @module tests/tools/geolocate-ip.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
@@ -74,17 +75,19 @@ describe('toolkit_geolocate_ip', () => {
     expect(result).toEqual(expect.schemaMatching(geolocateIpTool.output));
   });
 
-  it('bubbles private_target for a reserved-range target', async () => {
+  it('bubbles private_target with the declared ValidationError code for a reserved-range target', async () => {
     vi.stubGlobal('fetch', vi.fn());
     await expect(run({ target: '10.0.0.1' })).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'private_target' },
     });
   });
 
-  it('bubbles unresolvable_host when a hostname fails DNS', async () => {
+  it('bubbles unresolvable_host with the declared ValidationError code when a hostname fails DNS', async () => {
     lookupMock.mockRejectedValue(new Error('ENOTFOUND'));
     vi.stubGlobal('fetch', vi.fn());
     await expect(run({ target: 'no-such-host.invalid' })).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'unresolvable_host' },
     });
   });
