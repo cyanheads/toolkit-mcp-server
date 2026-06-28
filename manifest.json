@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "toolkit-mcp-server",
   "display_name": "toolkit-mcp-server",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Fast developer utilities — random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics.",
   "author": { "name": "cyanheads" },
   "homepage": "https://github.com/cyanheads/toolkit-mcp-server#readme",
@@ -68,7 +68,8 @@
       "description": "API key for the geolocation provider, if it requires one. The default ip-api tier is keyless.",
       "type": "string",
       "required": false,
-      "sensitive": true
+      "sensitive": true,
+      "default": ""
     },
     "TOOLKIT_GEO_BASE_URL": {
       "title": "Geolocation base URL",

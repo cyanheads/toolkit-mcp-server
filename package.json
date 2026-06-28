@@ -1,7 +1,8 @@
 {
-  "name": "toolkit-mcp-server",
-  "version": "0.1.0",
-  "description": "MCP server of fast developer utilities — cryptographically-random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics for local deployments.",
+  "name": "@cyanheads/toolkit-mcp-server",
+  "version": "2.0.0",
+  "mcpName": "io.github.cyanheads/toolkit-mcp-server",
+  "description": "Generate random IDs, QR codes, and hashes, encode and decode values, and geolocate IPs, plus gated network and system diagnostics, via MCP. STDIO or Streamable HTTP.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -39,7 +40,25 @@
     "start:stdio": "MCP_TRANSPORT_TYPE=stdio node dist/index.js",
     "start:http": "MCP_TRANSPORT_TYPE=http node dist/index.js"
   },
-  "keywords": ["mcp", "mcp-server", "model-context-protocol"],
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "developer-tools",
+    "utilities",
+    "uuid",
+    "ulid",
+    "qr-code",
+    "hashing",
+    "encoding",
+    "base64",
+    "ip-geolocation",
+    "network-diagnostics"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cyanheads/toolkit-mcp-server.git"
@@ -48,7 +67,9 @@
   "bugs": {
     "url": "https://github.com/cyanheads/toolkit-mcp-server/issues"
   },
+  "author": "cyanheads <casey@caseyjhand.com> (https://github.com/cyanheads/toolkit-mcp-server#readme)",
   "license": "Apache-2.0",
+  "packageManager": "bun@1.3.2",
   "engines": {
     "bun": ">=1.3.0",
     "node": ">=24.0.0"
@@ -64,7 +85,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@types/qrcode": "^1.5.6",
     "depcheck": "^1.4.7",
     "ignore": "^7.0.5",

@@ -8,9 +8,6 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import QRCode from 'qrcode';
 
-/** Map the public error-correction enum to the qrcode library's single-letter codes. */
-const EC_LEVEL = { L: 'L', M: 'M', Q: 'Q', H: 'H' } as const;
-
 export const generateQrTool = tool('toolkit_generate_qr', {
   title: 'toolkit-mcp-server: generate QR code',
   description:
@@ -75,7 +72,7 @@ export const generateQrTool = tool('toolkit_generate_qr', {
   }),
 
   async handler(input, ctx) {
-    const errorCorrectionLevel = EC_LEVEL[input.errorCorrection];
+    const errorCorrectionLevel = input.errorCorrection;
     // create() yields the chosen symbol version regardless of output format.
     const symbol = QRCode.create(input.data, { errorCorrectionLevel });
     const version = symbol.version;

@@ -67,7 +67,7 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
     },
   ],
 
-  async handler(input, ctx) {
+  handler(input, ctx) {
     // Service throws validationError carrying data.reason; it bubbles unchanged
     // and the auto-classifier preserves the reason for the declared contract.
     return getGeoService().lookup(input.target, ctx);

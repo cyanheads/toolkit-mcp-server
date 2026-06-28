@@ -1,26 +1,13 @@
 # Developer Protocol
 
 **Server:** toolkit-mcp-server
-**Version:** 0.1.0
+**Version:** 2.0.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.9`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
-
----
-
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. You're holding a production-grade MCP framework with the hard parts already solved — error handling, telemetry, auth, transport, validation, lifecycle. What's missing is the **domain**. Your job: design the tool, resource, and service surface with the user, then implement it as small pure handlers that throw — the framework catches, classifies, and instruments the rest. Design before code; the user's first messages set direction, so wait for them before scaffolding definitions.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
 
 ---
 
@@ -60,72 +47,86 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
-  annotations: { readOnlyHint: true },
+export const encodeValueTool = tool('toolkit_encode_value', {
+  title: 'toolkit-mcp-server: encode value', // title === unscoped package name on the identity surface; this is a per-tool display label
+  description: 'Encode or decode a value across base64, base64url, hex, or URL encoding.',
+  annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    operation: z.enum(['encode', 'decode']).describe('"encode" text → encoding; "decode" recovers text.'),
+    encoding: z.enum(['base64', 'base64url', 'hex', 'url']).describe('The encoding to apply.'),
+    value: z.string().describe('Raw text for encode, an encoded string for decode.'),
   }),
   output: z.object({
-    items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+    encoding: z.enum(['base64', 'base64url', 'hex', 'url']).describe('The encoding applied.'),
+    operation: z.enum(['encode', 'decode']).describe('The operation performed.'),
+    result: z.string().describe('The transformed value.'),
   }),
-  auth: ['inventory:read'],
 
-  async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
+  // Typed error contract — `ctx.fail` is compile-time-checked against these reasons,
+  // and `recovery` (>= 5 words) is the agent's next-move metadata.
+  errors: [
+    {
+      reason: 'decode_failed',
+      code: JsonRpcErrorCode.InvalidParams,
+      when: 'value is malformed for the chosen encoding.',
+      recovery: 'Verify the encoding matches the input, or switch operation to encode.',
+    },
+  ],
+
+  handler(input, ctx) {
+    if (input.operation === 'encode') {
+      return { ...input, result: encode(input.value, input.encoding) };
+    }
+    try {
+      return { ...input, result: decode(input.value, input.encoding) };
+    } catch {
+      // recoveryFor() mirrors the contract hint into content[]; pass an explicit
+      // hint at the throw site when dynamic context matters.
+      throw ctx.fail('decode_failed', `value is not valid ${input.encoding}.`, {
+        ...ctx.recoveryFor('decode_failed'),
+      });
+    }
   },
 
-  // format() populates content[] — the markdown twin of structuredContent.
-  // Different clients read different surfaces (Claude Code → structuredContent,
-  // Claude Desktop → content[]); both must carry the same data.
-  // Enforced at lint time: every field in `output` must appear in the rendered text.
-  format: (result) => [{
-    type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
-  }],
-});
-```
-
-### Resource
-
-```ts
-import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
-
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
-  async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
-  },
-});
-```
-
-### Prompt
-
-```ts
-import { prompt, z } from '@cyanheads/mcp-ts-core';
-
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
-  args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
-  }),
-  generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
+  // format() populates content[] — the markdown twin of structuredContent. Different
+  // clients read different surfaces (Claude Code → structuredContent, Claude Desktop →
+  // content[]); both must carry the same data. The linter enforces every output field appears.
+  format: (result) => [
+    { type: 'text', text: `**${result.operation}** (${result.encoding}): \`${result.result}\`` },
   ],
 });
+```
+
+This server exposes **no resources and no prompts** — seven tools and two services. When adding a resource or prompt later, read the `add-resource` / `add-prompt` skills for the builder shape.
+
+### Service (init / accessor singleton)
+
+Both services (`geo`, `network`) follow the init/accessor pattern — instantiated once in `createApp({ setup() })`, accessed by tools through a getter that throws if init was skipped.
+
+```ts
+// src/services/geo/geo-service.ts — the one external dependency, a lazy singleton.
+import type { Context } from '@cyanheads/mcp-ts-core';
+import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+
+export class GeoService {
+  async lookup(target: string, ctx: Context): Promise<GeoResult> {
+    // Logic throws; the framework catches and classifies. A sanitized
+    // serviceUnavailable hides the raw upstream error from the client — the
+    // original is kept as `cause` for server-side logs/telemetry only.
+    throw serviceUnavailable('Geolocation provider is unavailable. Try again shortly.');
+  }
+}
+
+let _service: GeoService | undefined;
+export function initGeoService(): void {
+  _service = new GeoService();
+}
+export function getGeoService(): GeoService {
+  if (!_service) throw new Error('GeoService not initialized — call initGeoService() in setup()');
+  return _service;
+}
 ```
 
 ### Server config
@@ -136,23 +137,28 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
-  verboseLogging: z.stringbool().default(false).describe('Enable verbose logging'),
+  // z.stringbool() so `=false` actually disables (Boolean("false") === true with coerce).
+  enableNetDiagnostics: z.stringbool().default(false).describe('Register toolkit_check_network (fail-closed).'),
+  enableSystemInfo: z.stringbool().default(false).describe('Register toolkit_check_system (fail-closed).'),
+  allowPrivateNetwork: z.stringbool().default(false).describe('Second gate: permit private/reserved targets.'),
+  geoProvider: z.string().default('ip-api').describe('Geolocation provider id (keyless by default).'),
+  geoCacheTtlSeconds: z.coerce.number().int().min(0).default(3600).describe('Geo cache TTL in seconds.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
 export function getServerConfig() {
   _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
-    verboseLogging: 'MY_VERBOSE_LOGGING',
+    enableNetDiagnostics: 'TOOLKIT_ENABLE_NET_DIAGNOSTICS',
+    enableSystemInfo: 'TOOLKIT_ENABLE_SYSTEM_INFO',
+    allowPrivateNetwork: 'TOOLKIT_ALLOW_PRIVATE_NETWORK',
+    geoProvider: 'TOOLKIT_GEO_PROVIDER',
+    geoCacheTtlSeconds: 'TOOLKIT_GEO_CACHE_TTL_SECONDS',
   });
   return _config;
 }
 ```
 
-`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`MY_API_KEY`) not the path (`apiKey`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
+`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`TOOLKIT_GEO_CACHE_TTL_SECONDS`) not the path (`geoCacheTtlSeconds`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
 
 For env booleans use `z.stringbool()`, never `z.coerce.boolean()` — `Boolean("false")` is `true`, so a coerced flag can't be disabled through the environment. `z.stringbool()` parses `true/false/1/0/yes/no/on/off` and rejects anything else, so `=false` actually disables.
 
@@ -162,12 +168,16 @@ For env booleans use `z.stringbool()`, never `z.coerce.boolean()` — `Boolean("
 
 ```ts
 await createApp({
-  name: 'my-mcp-server',
-  title: 'My Server',                         // human-readable display name
-  websiteUrl: 'https://github.com/owner/repo', // canonical homepage URL
-  description: 'One-line description.',        // wins over MCP_SERVER_DESCRIPTION
-  icons: [{ src: 'https://example.com/icon.png', sizes: ['48x48'], mimeType: 'image/png' }],
-  instructions: 'Use shortcut alpha for the most common case.', // session-level context
+  name: 'toolkit-mcp-server',
+  title: 'toolkit-mcp-server', // MUST equal the unscoped package name — enforced by lint:packaging. Never Title Case.
+  tools,
+  setup() {
+    initGeoService();
+    // gated services init only behind their enable-flag
+  },
+  // `description` derives from package.json (the canonical source) — do NOT
+  // duplicate it (or websiteUrl) into createApp(); a copy is drift.
+  instructions: 'Optional session-level orientation, sent on every initialize as session context.',
 });
 ```
 
@@ -186,6 +196,7 @@ Handlers receive a unified `ctx` object. Key properties:
 | `ctx.elicit` | Ask user for structured input — form call `(message, schema)` or `.url(message, url)` for an external link. **Check for presence first:** `if (ctx.elicit) { ... }` |
 | `ctx.signal` | `AbortSignal` for cancellation. |
 | `ctx.progress` | Task progress (present when `task: true`) — `.setTotal(n)`, `.increment()`, `.update(message)`. |
+| `ctx.recoveryFor(reason)` | Typed lookup of the contract `recovery` for a declared error reason. Returns `{ recovery: { hint } }` for a known reason, `{}` otherwise. Spread into `ctx.fail` data to mirror the contract hint into `content[]`. |
 | `ctx.requestId` | Unique request ID. |
 | `ctx.tenantId` | Tenant ID from JWT or `'default'` for stdio. |
 
@@ -239,21 +250,22 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
+  index.ts                              # createApp() entry point — fail-closed tool registration
   config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
+    server-config.ts                    # Server-specific env vars (Zod schema, parseEnvConfig)
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    geo/
+      geo-service.ts                    # Geolocation: DNS resolve, provider call, normalize, cache
+      types.ts                          # GeoResult domain type
+    network/
+      net-diag-service.ts               # Node-only ping / traceroute / connectivity / public_ip
+      target.ts                         # Shared target schema + private-range classifier
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
-    resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      *.tool.ts                         # Seven tool definitions — five always-on, two gated
 ```
+
+No `resources/` or `prompts/` — this server exposes neither.
 
 ---
 

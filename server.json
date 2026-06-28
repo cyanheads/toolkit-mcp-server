@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/toolkit-mcp-server",
-  "description": "Developer utilities: random IDs, QR codes, IP geolocation, hashing, encoding, and gated diagnostics.",
+  "description": "Generate IDs, QR codes, and hashes, encode values, geolocate IPs, plus gated host diagnostics.",
   "repository": {
     "url": "https://github.com/cyanheads/toolkit-mcp-server",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "2.0.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "toolkit-mcp-server",
-      "runtimeHint": "node",
-      "version": "0.1.0",
+      "identifier": "@cyanheads/toolkit-mcp-server",
+      "runtimeHint": "bun",
+      "version": "2.0.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -96,9 +96,9 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "toolkit-mcp-server",
-      "runtimeHint": "node",
-      "version": "0.1.0",
+      "identifier": "@cyanheads/toolkit-mcp-server",
+      "runtimeHint": "bun",
+      "version": "2.0.0",
       "packageArguments": [
         {
           "type": "positional",

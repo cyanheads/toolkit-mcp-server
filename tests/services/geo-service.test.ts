@@ -5,7 +5,8 @@
  * and node:dns/promises is mocked for hostname resolution. Covers the happy path,
  * sparse upstream payloads, hostname → resolvedIp echo, the cache, and every
  * failure reason (unresolvable_host, private_target via guard and via provider
- * envelope, and a non-OK upstream response).
+ * envelope), plus the sanitized non-OK upstream response — asserting no upstream
+ * internals (URL, status, response body, requestId) reach the client.
  * @module tests/services/geo-service.test
  */
 
@@ -190,9 +191,13 @@ describe('GeoService', () => {
           jsonResponse({ status: 'fail', message: 'reserved range', query: '0.0.0.1' }),
         ),
     );
-    await expect(lookup('203.0.113.7')).rejects.toMatchObject({
-      data: { reason: 'private_target', retryable: false },
-    });
+    const error = await lookup('203.0.113.7').catch((e: unknown) => e);
+    expect(error).toMatchObject({ data: { reason: 'private_target', retryable: false } });
+    // The target passed the private-range guard, so it is a public-format
+    // address — the recovery hint must NOT tell the caller to pass a public IP.
+    const hint = (error as { data?: { recovery?: { hint?: string } } }).data?.recovery?.hint ?? '';
+    expect(hint).not.toMatch(/pass a public ip/i);
+    expect(hint).toMatch(/no public geolocation/i);
   });
 
   it('caches by resolved IP — a repeat lookup does not re-call the provider', async () => {
@@ -215,16 +220,32 @@ describe('GeoService', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('surfaces a non-OK upstream response as an error (after retries)', async () => {
+  it('sanitizes a non-OK upstream response — no upstream internals reach the client', async () => {
     vi.useFakeTimers();
     try {
-      // fetchWithTimeout maps a non-OK Response to an McpError; withRetry treats a
-      // 503 as transient and retries with backoff — advance timers so it resolves fast.
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'down' }, 503)));
+      // fetchWithTimeout maps a non-OK Response to an McpError carrying the URL,
+      // status, and response body; withRetry treats a 503 as transient and
+      // retries with backoff — advance timers so it resolves fast. The service
+      // must re-throw a clean ServiceUnavailable that leaks none of that.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(jsonResponse({ secret: 'upstream-body-should-not-leak' }, 503)),
+      );
       const promise = lookup('8.8.8.8');
-      const assertion = expect(promise).rejects.toThrow();
+      const settled = promise.catch((e: unknown) => e);
       await vi.runAllTimersAsync();
-      await assertion;
+      const error = (await settled) as { code?: number; message?: string; data?: unknown };
+      // ServiceUnavailable, generic provider-named message — no URL/IP/status/body.
+      expect(error.message).toMatch(/geolocation provider .* is unavailable/i);
+      expect(error.message).not.toMatch(/8\.8\.8\.8|http|status|503|secret/i);
+      // No leaky `data`: requestId, statusCode, responseBody, internal operation
+      // name must all be absent (the framework fetch error carries them).
+      const data = (error.data ?? {}) as Record<string, unknown>;
+      expect(data).not.toHaveProperty('statusCode');
+      expect(data).not.toHaveProperty('responseBody');
+      expect(data).not.toHaveProperty('requestId');
+      expect(data).not.toHaveProperty('operation');
+      expect(JSON.stringify(data)).not.toMatch(/upstream-body-should-not-leak/);
     } finally {
       vi.useRealTimers();
     }

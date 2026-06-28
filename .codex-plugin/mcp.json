@@ -1,7 +1,7 @@
 {
   "toolkit-mcp-server": {
     "command": "npx",
-    "args": ["-y", "toolkit-mcp-server"],
+    "args": ["-y", "@cyanheads/toolkit-mcp-server"],
     "env": {
       "MCP_TRANSPORT_TYPE": "stdio"
     }

@@ -107,7 +107,7 @@ export const checkNetworkTool = tool('toolkit_check_network', {
     },
   ],
 
-  async handler(input, ctx) {
+  handler(input, ctx) {
     // Service enforces the request-time private-range gate and carries data.reason.
     return getNetDiagService().run(input, ctx);
   },

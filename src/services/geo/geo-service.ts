@@ -10,7 +10,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import type { Context } from '@cyanheads/mcp-ts-core';
-import { validationError } from '@cyanheads/mcp-ts-core/errors';
+import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { isPrivateOrReservedIp } from '@/services/network/target.js';
@@ -58,8 +58,10 @@ export class GeoService {
 
   /**
    * Geolocate an IP or hostname. Throws `validationError` (reason
-   * `private_target`) for private/reserved IPs, `serviceUnavailable` when the
-   * provider fails for a non-geographic reason.
+   * `private_target`) for private/reserved or provider-unlocatable IPs, and a
+   * sanitized `serviceUnavailable` when the provider request fails — the raw
+   * upstream error (URL, HTTP status, response body, requestId) is logged
+   * server-side but never surfaced to the client.
    */
   async lookup(target: string, ctx: Context): Promise<GeoResult> {
     const cfg = getServerConfig();
@@ -90,30 +92,55 @@ export class GeoService {
       parentContext: { requestId: ctx.requestId, tenantId: ctx.tenantId, traceId: ctx.traceId },
     });
 
-    const raw = await withRetry(
-      async () => {
-        const response = await fetchWithTimeout(url.toString(), 8000, reqCtx, {
+    let raw: IpApiResponse;
+    try {
+      raw = await withRetry(
+        async () => {
+          const response = await fetchWithTimeout(url.toString(), 8000, reqCtx, {
+            signal: ctx.signal,
+          });
+          return (await response.json()) as IpApiResponse;
+        },
+        {
+          operation: 'GeoService.lookup',
+          context: reqCtx,
+          baseDelayMs: 1500,
           signal: ctx.signal,
-        });
-        return (await response.json()) as IpApiResponse;
-      },
-      {
-        operation: 'GeoService.lookup',
-        context: reqCtx,
-        baseDelayMs: 1500,
-        signal: ctx.signal,
-      },
-    );
+        },
+      );
+    } catch (err) {
+      // Caller cancellation isn't a provider failure — let it bubble unchanged.
+      if (ctx.signal.aborted) throw err;
+      // The framework fetch error carries the provider URL, requestId, HTTP
+      // status, and up to 500 bytes of the upstream response body in its `data`.
+      // Re-throw a clean ServiceUnavailable so none of that reaches the client;
+      // the original is preserved as `cause` for server-side logs/telemetry only.
+      ctx.log.error(
+        'Geo provider request failed',
+        err instanceof Error ? err : new Error(String(err)),
+        { resolvedIp },
+      );
+      throw serviceUnavailable(
+        `Geolocation provider "${cfg.geoProvider}" is unavailable. Try again shortly.`,
+        undefined,
+        { cause: err },
+      );
+    }
 
     if (raw.status === 'fail') {
-      // Provider classified the IP itself as unlocatable (reserved/private/invalid).
-      // This will never succeed on retry, so surface it as a (non-retryable) validation error.
+      // Provider classified the IP itself as unlocatable (reserved/bogon/unrouted).
+      // This will never succeed on retry, so surface it as a (non-retryable)
+      // validation error. The target passed the private-range guard, so it is a
+      // public-format address — the recovery hint must NOT imply the caller
+      // failed to pass a public IP (it reads oddly for e.g. TEST-NET ranges).
       throw validationError(
         `Geolocation provider could not locate ${resolvedIp}: ${raw.message ?? 'unknown reason'}.`,
         {
           reason: 'private_target',
           retryable: false,
-          ...ctx.recoveryFor('private_target'),
+          recovery: {
+            hint: 'This address has no public geolocation (it is reserved, unrouted, or bogon). Use a routable public IP.',
+          },
         },
       );
     }
