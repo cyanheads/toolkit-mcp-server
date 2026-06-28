@@ -6,14 +6,14 @@
     "url": "https://github.com/cyanheads/toolkit-mcp-server",
     "source": "github"
   },
-  "version": "2.0.0",
+  "version": "2.0.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/toolkit-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "packageArguments": [
         {
           "type": "positional",
@@ -83,7 +83,7 @@
         },
         {
           "name": "TOOLKIT_GEO_RATE_LIMIT_PER_MIN",
-          "description": "Max geolocation requests per minute before backoff slows. Default 45 matches the ip-api free tier.",
+          "description": "Max geolocation requests per minute; excess requests are rejected with a retryable rate-limit error. Default 45 matches the ip-api free tier.",
           "format": "string",
           "isRequired": false,
           "default": "45"
@@ -98,7 +98,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/toolkit-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "packageArguments": [
         {
           "type": "positional",
@@ -196,7 +196,7 @@
         },
         {
           "name": "TOOLKIT_GEO_RATE_LIMIT_PER_MIN",
-          "description": "Max geolocation requests per minute before backoff slows. Default 45 matches the ip-api free tier.",
+          "description": "Max geolocation requests per minute; excess requests are rejected with a retryable rate-limit error. Default 45 matches the ip-api free tier.",
           "format": "string",
           "isRequired": false,
           "default": "45"

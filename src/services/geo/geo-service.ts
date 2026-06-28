@@ -10,8 +10,15 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import type { Context } from '@cyanheads/mcp-ts-core';
+import { config } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import {
+  fetchWithTimeout,
+  logger,
+  RateLimiter,
+  requestContextService,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { isPrivateOrReservedIp } from '@/services/network/target.js';
 import type { GeoResult } from './types.js';
@@ -38,9 +45,30 @@ const IP_API_FIELDS =
 
 type CacheEntry = { result: GeoResult; expiresAt: number };
 
+/** Fixed key for the process-wide outbound geolocation throttle. */
+const RATE_LIMIT_KEY = 'geo-lookup';
+
 export class GeoService {
   /** In-memory TTL cache keyed by resolved IP. Geolocation is stable, so repeats are cheap. */
   private readonly cache = new Map<string, CacheEntry>();
+
+  /**
+   * Per-process throttle on outbound provider calls, bounded by
+   * TOOLKIT_GEO_RATE_LIMIT_PER_MIN so the keyless free tier isn't blown past
+   * accidentally. Single fixed key, so the per-key cleanup timer is disabled.
+   */
+  private readonly rateLimiter: RateLimiter;
+
+  constructor() {
+    this.rateLimiter = new RateLimiter(config, logger);
+    this.rateLimiter.configure({
+      maxRequests: getServerConfig().geoRateLimitPerMin,
+      windowMs: 60_000,
+      cleanupInterval: 0,
+      errorMessage:
+        'Geolocation lookups are rate-limited to stay within the provider quota. Retry in {waitTime}.',
+    });
+  }
 
   /** Resolve a hostname to its first A/AAAA address; pass IPs through unchanged. */
   private async resolveTarget(target: string, ctx: Context): Promise<string> {
@@ -79,6 +107,10 @@ export class GeoService {
       ctx.log.debug('Geo cache hit', { resolvedIp });
       return { ...cached.result, target };
     }
+
+    // Throttle only actual provider calls — cache hits above never reach the
+    // upstream. Throws a RateLimited error when the per-minute budget is spent.
+    this.rateLimiter.check(RATE_LIMIT_KEY);
 
     const url = new URL(`/json/${encodeURIComponent(resolvedIp)}`, cfg.geoBaseUrl);
     url.searchParams.set('fields', IP_API_FIELDS);

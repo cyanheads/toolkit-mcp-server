@@ -10,6 +10,7 @@
  * @module tests/services/geo-service.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
@@ -220,6 +221,21 @@ describe('GeoService', () => {
     await lookup('8.8.8.8');
     await lookup('8.8.8.8');
     // expiresAt = now + 0 is not strictly greater than a later now → re-fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('throttles outbound provider calls per TOOLKIT_GEO_RATE_LIMIT_PER_MIN', async () => {
+    vi.stubEnv('TOOLKIT_GEO_RATE_LIMIT_PER_MIN', '2');
+    resetServerConfig();
+    initGeoService();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD));
+    vi.stubGlobal('fetch', fetchMock);
+    // Distinct public IPs so the cache never short-circuits a provider call.
+    await lookup('8.8.8.8');
+    await lookup('8.8.4.4');
+    // The third lookup blows the per-minute budget → RateLimited before any fetch.
+    const error = await lookup('1.1.1.1').catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: JsonRpcErrorCode.RateLimited });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

@@ -57,13 +57,15 @@ const ServerConfigSchema = z.object({
     .min(0)
     .default(3600)
     .describe('GeoService cache TTL in seconds. Geolocation is stable, so repeats are cached.'),
-  /** Max geo-API requests per minute before backoff slows. Default matches ip-api free tier. */
+  /** Max geo-API requests per minute; excess is rejected with a retryable rate-limit error. Default matches ip-api free tier. */
   geoRateLimitPerMin: z.coerce
     .number()
     .int()
     .min(1)
     .default(45)
-    .describe('Max geolocation requests per minute. Default 45 matches the ip-api free tier.'),
+    .describe(
+      'Max geolocation requests per minute; excess requests are rejected with a retryable rate-limit error. Default 45 matches the ip-api free tier.',
+    ),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
