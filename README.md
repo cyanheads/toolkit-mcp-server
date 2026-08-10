@@ -19,6 +19,12 @@
 
 </div>
 
+<div align="center">
+
+**Public Hosted Server:** [https://toolkit.caseyjhand.com/mcp](https://toolkit.caseyjhand.com/mcp)
+
+</div>
+
 ---
 
 ## Tools
@@ -133,6 +139,23 @@ Agent-friendly output:
 - Typed failure reasons — decode failures, missing digests, and blocked private targets each carry a structured reason plus a next-step recovery hint
 
 ## Getting started
+
+### Public Hosted Instance
+
+A public instance is available at `https://toolkit.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "toolkit-mcp-server": {
+      "type": "streamable-http",
+      "url": "https://toolkit.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+### Self-Hosted / Local
 
 Add the following to your MCP client configuration file. No API key is required — the five always-on tools and the default keyless geolocation tier work out of the box.
 
