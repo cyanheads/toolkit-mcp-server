@@ -34,6 +34,19 @@ function decode(value: string, encoding: Encoding): string {
   return buf.toString('utf8');
 }
 
+/**
+ * Wrap transformed text in a code fence the text itself cannot close. A fenced
+ * block ends at the first backtick-only line at least as long as its opener, so
+ * decoded content carrying its own fence would otherwise break out and have the
+ * remainder read as Markdown. Sizing the delimiter one backtick past the
+ * longest run in the payload keeps the value literal without altering it.
+ */
+function fence(value: string): string {
+  const longestRun = Math.max(0, ...[...value.matchAll(/`+/g)].map((m) => m[0].length));
+  const delimiter = '`'.repeat(Math.max(3, longestRun + 1));
+  return `${delimiter}\n${value}\n${delimiter}`;
+}
+
 export const encodeValueTool = tool('toolkit_encode_value', {
   title: 'toolkit-mcp-server: encode value',
   description:
@@ -93,7 +106,7 @@ export const encodeValueTool = tool('toolkit_encode_value', {
   format: (result) => [
     {
       type: 'text',
-      text: `**${result.operation === 'encode' ? 'Encoded' : 'Decoded'}** (operation: ${result.operation}, encoding: ${result.encoding}):\n\`\`\`\n${result.result}\n\`\`\``,
+      text: `**${result.operation === 'encode' ? 'Encoded' : 'Decoded'}** (operation: ${result.operation}, encoding: ${result.encoding}):\n${fence(result.result)}`,
     },
   ],
 });

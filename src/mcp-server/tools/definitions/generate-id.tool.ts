@@ -2,8 +2,8 @@
  * @fileoverview toolkit_generate_id — mint cryptographically-random identifiers
  * (UUIDv4 / UUIDv7 / ULID), single or batch. Backed by the platform CSPRNG via
  * node:crypto; the one reason to call a tool instead of letting a model invent
- * "random" values. Always-on, but readOnlyHint:false — each call is fresh,
- * non-idempotent entropy by design.
+ * "random" values. Always-on and read-only — it draws entropy and returns it,
+ * changing nothing — but never idempotent: each call is fresh by design.
  * @module mcp-server/tools/definitions/generate-id.tool
  */
 
@@ -96,10 +96,14 @@ export const generateIdTool = tool('toolkit_generate_id', {
   title: 'toolkit-mcp-server: generate id',
   description:
     'Mint cryptographically-random identifiers using the platform CSPRNG — the correct source for IDs that must be unpredictable, unlike model-generated values. type selects the format: uuid_v4 (random, the default), uuid_v7 (time-ordered, sortable by creation), or ulid (26-char Crockford-base32, lexicographically sortable). Set count to mint a batch in one call (up to 1000); the returned ids array always contains exactly count values and is never truncated. For uuid_v7 and ulid, a batch is monotonic — strictly increasing even within the same millisecond — so the ids array stays in sorted creation order. IDs from this tool feed into toolkit_generate_qr (pass ids[0] as data) to create a scannable code.',
-  // Deliberately NOT read-only: each call produces fresh, non-reproducible
-  // entropy. readOnlyHint:false / idempotentHint:false prevent a client from
-  // treating it as a side-effect-free, auto-approvable, cacheable call.
-  annotations: { readOnlyHint: false, openWorldHint: false, idempotentHint: false },
+  // Two independent questions, answered separately. readOnlyHint: does the tool
+  // modify its environment? It does not — it draws from the CSPRNG and returns
+  // the bytes — so claiming a write would bucket it with genuinely mutating
+  // tools and drag every caller through a write-approval flow. idempotentHint:
+  // do repeat calls with the same arguments have no additional effect? Each one
+  // yields fresh, non-reproducible entropy, so false is what keeps a client
+  // from caching or deduplicating a batch.
+  annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: false },
   input: z.object({
     type: z
       .enum(['uuid_v4', 'uuid_v7', 'ulid'])

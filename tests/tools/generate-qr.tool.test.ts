@@ -1,21 +1,32 @@
 /**
- * @fileoverview Tests for toolkit_generate_qr — the three output formats,
- * PNG byte validity, and version reflecting data density.
+ * @fileoverview Tests for toolkit_generate_qr — the three output formats, PNG
+ * byte validity, version reflecting data density, the PNG image content block,
+ * and the rendered-raster pixel budget.
  * @module tests/tools/generate-qr.tool.test
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getContentBlocks } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
-import { generateQrTool } from '@/mcp-server/tools/definitions/generate-qr.tool.js';
+import {
+  generateQrTool,
+  QR_MAX_PNG_EDGE_PX,
+} from '@/mcp-server/tools/definitions/generate-qr.tool.js';
 
-const run = async (args: unknown) =>
-  generateQrTool.handler(
-    generateQrTool.input.parse(args),
-    createMockContext({ errors: generateQrTool.errors }),
-  );
+/** Run the handler on a caller-visible context so content blocks can be read. */
+const runWith = async (args: unknown) => {
+  const ctx = createMockContext({ errors: generateQrTool.errors });
+  const result = await generateQrTool.handler(generateQrTool.input.parse(args), ctx);
+  return { result, ctx };
+};
+
+const run = async (args: unknown) => (await runWith(args)).result;
 
 const PNG_MAGIC = '89504e470d0a1a0a';
+
+/** Rendered edge in pixels for a symbol version at a given margin and scale. */
+const edgePx = (version: number, margin: number, scale: number) =>
+  (version * 4 + 17 + 2 * margin) * scale;
 
 describe('toolkit_generate_qr', () => {
   it('produces well-formed SVG markup', async () => {
@@ -111,6 +122,84 @@ describe('toolkit_generate_qr', () => {
     expect(result).toEqual(expect.schemaMatching(generateQrTool.output));
   });
 
+  it('emits the PNG as a single image content block matching structuredContent', async () => {
+    const { result, ctx } = await runWith({ data: 'qr parity test', format: 'png_base64' });
+    expect(getContentBlocks(ctx)).toEqual([
+      { type: 'image', data: result.content, mimeType: 'image/png' },
+    ]);
+  });
+
+  it.each(['svg', 'terminal'] as const)('emits no content block for %s', async (format) => {
+    const { ctx } = await runWith({ data: 'abc', format });
+    expect(getContentBlocks(ctx)).toEqual([]);
+  });
+
+  it('emits the complete image block for the largest permitted raster', async () => {
+    // Version 40 at level L with the largest scale the pixel budget allows —
+    // the image block carries every byte, untruncated.
+    const { result, ctx } = await runWith({
+      data: 'x'.repeat(2953),
+      format: 'png_base64',
+      errorCorrection: 'L',
+      scale: 11,
+    });
+    expect(result.version).toBe(40);
+    const block = getContentBlocks(ctx)[0] as { data: string };
+    expect(block.data).toBe(result.content);
+    expect(Buffer.from(block.data, 'base64')).toHaveLength(result.byteLength as number);
+  });
+
+  it('rejects a raster over the pixel budget with a typed error', async () => {
+    // Version 40 (177 modules) at scale 32 renders a ~5900 px square — a ~180 MB
+    // RGBA buffer from a 3 KB request.
+    const error = await run({
+      data: 'x'.repeat(2953),
+      format: 'png_base64',
+      errorCorrection: 'L',
+      scale: 32,
+    }).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      data: { reason: 'raster_too_large' },
+    });
+    // The hint names a scale that fits, so the caller's next attempt succeeds.
+    const hint = (error as { data: { recovery?: { hint?: string } } }).data.recovery?.hint ?? '';
+    expect(hint).toMatch(/scale/i);
+    expect(hint).toContain(String(QR_MAX_PNG_EDGE_PX));
+  });
+
+  it('rejects a small symbol whose margin and scale still blow the budget', async () => {
+    // A tiny payload is not a free pass: margin 20 at scale 32 exceeds the
+    // budget from version 2 upward.
+    const error = await run({
+      data: 'x'.repeat(20),
+      format: 'png_base64',
+      margin: 20,
+      scale: 32,
+    }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ data: { reason: 'raster_too_large' } });
+  });
+
+  it('accepts the raster on the permitted side of the budget and rejects one step past', async () => {
+    const data = 'x'.repeat(2953);
+    expect(edgePx(40, 4, 11)).toBeLessThanOrEqual(QR_MAX_PNG_EDGE_PX);
+    expect(edgePx(40, 4, 12)).toBeGreaterThan(QR_MAX_PNG_EDGE_PX);
+    await expect(
+      run({ data, format: 'png_base64', errorCorrection: 'L', scale: 11 }),
+    ).resolves.toMatchObject({ format: 'png_base64' });
+    await expect(
+      run({ data, format: 'png_base64', errorCorrection: 'L', scale: 12 }),
+    ).rejects.toMatchObject({ data: { reason: 'raster_too_large' } });
+  });
+
+  it('leaves svg and terminal unbounded — only the raster path has a budget', async () => {
+    const args = { data: 'x'.repeat(2953), errorCorrection: 'L', margin: 20, scale: 32 } as const;
+    await expect(run({ ...args, format: 'svg' })).resolves.toMatchObject({ format: 'svg' });
+    await expect(run({ ...args, format: 'terminal' })).resolves.toMatchObject({
+      format: 'terminal',
+    });
+  });
+
   it('format embeds the SVG artifact and summarizes PNG without dumping base64', () => {
     const svgText = (
       generateQrTool.format!({
@@ -132,7 +221,10 @@ describe('toolkit_generate_qr', () => {
         version: 3,
       })[0] as { text: string }
     ).text;
+    expect(pngText).toContain('png_base64');
+    expect(pngText).toContain('image/png');
+    expect(pngText).toContain('version 3');
     expect(pngText).toContain('123 bytes');
-    expect(pngText).not.toContain('QUJD'); // base64 stays in structuredContent.content
+    expect(pngText).not.toContain('QUJD'); // the payload rides the image block, not the text
   });
 });

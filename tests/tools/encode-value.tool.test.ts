@@ -90,6 +90,44 @@ describe('toolkit_encode_value', () => {
     expect(result).toEqual(expect.schemaMatching(encodeValueTool.output));
   });
 
+  it('format fences plain content with a standard triple-backtick block', async () => {
+    const dec = await run({ operation: 'decode', encoding: 'hex', value: '616263' });
+    const text = (encodeValueTool.format!(dec)[0] as { text: string }).text;
+    expect(text).toContain('\n```\nabc\n```');
+  });
+
+  it.each([
+    // Decoded text that opens its own fence, then Markdown and angle-bracket
+    // content the surrounding fence must keep literal.
+    ['a fence with an info string', 'YGBgeAojIEhlYWRpbmcKPHRhZz4mXzwvdGFnPg=='],
+    // A bare triple-backtick line — the classic fence break.
+    ['a bare fence line', Buffer.from('before\n```\nafter').toString('base64')],
+    // A run longer than three, so a four-backtick fence would break too.
+    ['a six-backtick run', Buffer.from('``````\nx').toString('base64')],
+    // Backticks at the very edges of the payload.
+    ['leading and trailing backticks', Buffer.from('`edge`').toString('base64')],
+  ])('format keeps decoded content carrying %s inside its fence', async (_label, value) => {
+    const dec = await run({ operation: 'decode', encoding: 'base64', value });
+    const text = (encodeValueTool.format!(dec)[0] as { text: string }).text;
+    const lines = text.split('\n');
+    const openIndex = lines.findIndex((line) => /^`{3,}$/.test(line));
+    expect(openIndex).toBeGreaterThan(-1);
+    // A fenced block closes on any backtick-only line at least as long as its
+    // opener, so that — not string equality — is what the payload must never
+    // produce. Exactly two such lines means the opener and its own closer.
+    const delimiter = new RegExp(`^\`{${(lines[openIndex] as string).length},}$`);
+    expect(lines.filter((line) => delimiter.test(line))).toHaveLength(2);
+    // And the block's body is the decoded value, byte for byte.
+    expect(
+      lines
+        .slice(
+          openIndex + 1,
+          lines.findLastIndex((line) => delimiter.test(line)),
+        )
+        .join('\n'),
+    ).toBe(dec.result);
+  });
+
   it('format renders the transformed value and direction', async () => {
     const enc = await run({ operation: 'encode', encoding: 'hex', value: 'abc' });
     const encText = (encodeValueTool.format!(enc)[0] as { text: string }).text;

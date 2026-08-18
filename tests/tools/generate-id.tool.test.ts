@@ -84,6 +84,17 @@ describe('toolkit_generate_id', () => {
     expect(result).toEqual(expect.schemaMatching(generateIdTool.output));
   });
 
+  it('is annotated read-only and non-idempotent', () => {
+    // Minting draws from the CSPRNG and returns it — nothing in the environment
+    // changes, so readOnlyHint is true. Repeat calls return different values, so
+    // idempotentHint stays false and clients must not cache or dedupe them.
+    expect(generateIdTool.annotations).toEqual({
+      readOnlyHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    });
+  });
+
   it('format lists every minted id', () => {
     const blocks = generateIdTool.format!({
       type: 'ulid',

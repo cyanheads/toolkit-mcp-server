@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.1.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.30.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.30.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -59,7 +59,7 @@ Mint cryptographically-random identifiers from the platform CSPRNG — the corre
 - `type`: `uuid_v4` (random, default), `uuid_v7` (time-ordered, sortable by creation), or `ulid` (26-char Crockford base32, lexicographically sortable)
 - `count` mints a batch up to 1000 in one call; the returned `ids` array always holds exactly `count` values
 - `uuid_v7` and `ulid` batches are monotonic — strictly increasing even within the same millisecond — so `ids` stays in sorted creation order
-- Not read-only — each call is fresh entropy, so a client won't cache it or auto-approve it as side-effect-free
+- Read-only — minting changes nothing — but never idempotent, so a client won't cache or deduplicate a batch
 
 ---
 
@@ -70,6 +70,8 @@ Encode text or a URL into a QR code.
 - `format`: `svg` (inline markup), `png_base64` (raster bytes with `mimeType` and `byteLength`), or `terminal` (Unicode block string)
 - `errorCorrection` (L/M/Q/H) trades data capacity for damage tolerance; `margin` sets the quiet-zone width; `scale` sets pixels per module for raster output
 - The returned `version` (1–40) reflects how dense the encoded data is
+- `png_base64` also arrives as an MCP image content block, so a client reading `content[]` can render the code without decoding `structuredContent`
+- A rendered PNG is bounded at 2048 px per side — `(modules + 2 × margin) × scale` — so a dense symbol at a high `scale` is rejected with a typed `raster_too_large` error naming a scale that fits; `svg` and `terminal` are unbounded
 - `data` is capped at 2953 bytes — the absolute ceiling (version 40, level L, byte mode); usable capacity is lower at higher `errorCorrection` levels, so over-capacity input is rejected with a typed `data_too_large` error rather than a generic failure
 
 ---
