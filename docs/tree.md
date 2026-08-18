@@ -1,6 +1,6 @@
 # toolkit-mcp-server - Directory Structure
 
-Generated on: 2026-06-28 00:34:17
+Generated on: 2026-08-18 12:50:47
 
 ```text
 toolkit-mcp-server/
@@ -10,15 +10,20 @@ toolkit-mcp-server/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
 ├── changelog/
 │   ├── 2.0.x/
+│   ├── 2.1.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -164,6 +169,7 @@ toolkit-mcp-server/
 │       └── hash-value.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.1.0](changelog/2.1.x/2.1.0.md) — 2026-08-18 · ⚠️ Breaking · 🛡️ Security
+
+IPv6 private-range guard flipped from denylist to allowlist, provider strings bounded and sanitized, geolocate_ip gains proxy/hosting/mobile flags, geo cache bounded, and TOOLKIT_GEO_PROVIDER removed as a phantom config.
+
 ## [2.0.1](changelog/2.0.x/2.0.1.md) — 2026-06-28
 
 Three bug fixes: a typed data_too_large error for over-capacity QR payloads, strictly-monotonic uuid_v7/ulid batches, and an enforced TOOLKIT_GEO_RATE_LIMIT_PER_MIN throttle.
