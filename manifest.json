@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "toolkit-mcp-server",
   "display_name": "toolkit-mcp-server",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Fast developer utilities — random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics.",
   "author": { "name": "cyanheads" },
   "homepage": "https://github.com/cyanheads/toolkit-mcp-server#readme",
@@ -21,7 +21,6 @@
         "TOOLKIT_ENABLE_NET_DIAGNOSTICS": "${user_config.TOOLKIT_ENABLE_NET_DIAGNOSTICS}",
         "TOOLKIT_ENABLE_SYSTEM_INFO": "${user_config.TOOLKIT_ENABLE_SYSTEM_INFO}",
         "TOOLKIT_ALLOW_PRIVATE_NETWORK": "${user_config.TOOLKIT_ALLOW_PRIVATE_NETWORK}",
-        "TOOLKIT_GEO_PROVIDER": "${user_config.TOOLKIT_GEO_PROVIDER}",
         "TOOLKIT_GEO_API_KEY": "${user_config.TOOLKIT_GEO_API_KEY}",
         "TOOLKIT_GEO_BASE_URL": "${user_config.TOOLKIT_GEO_BASE_URL}",
         "TOOLKIT_GEO_CACHE_TTL_SECONDS": "${user_config.TOOLKIT_GEO_CACHE_TTL_SECONDS}",
@@ -56,16 +55,9 @@
       "required": false,
       "default": "false"
     },
-    "TOOLKIT_GEO_PROVIDER": {
-      "title": "Geolocation provider",
-      "description": "IP-geolocation provider id. Default 'ip-api' is the keyless free tier.",
-      "type": "string",
-      "required": false,
-      "default": "ip-api"
-    },
     "TOOLKIT_GEO_API_KEY": {
       "title": "Geolocation API key",
-      "description": "API key for the geolocation provider, if it requires one. The default ip-api tier is keyless.",
+      "description": "API key for the geolocation endpoint, if it requires one. The default ip-api tier is keyless.",
       "type": "string",
       "required": false,
       "sensitive": true,
@@ -73,7 +65,7 @@
     },
     "TOOLKIT_GEO_BASE_URL": {
       "title": "Geolocation base URL",
-      "description": "Base URL for the geolocation provider. Default is the keyless ip-api endpoint.",
+      "description": "Base URL for an ip-api-compatible geolocation endpoint. Default is the keyless ip-api endpoint, which is plaintext HTTP.",
       "type": "string",
       "required": false,
       "default": "http://ip-api.com"

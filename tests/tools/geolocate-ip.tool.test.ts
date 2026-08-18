@@ -12,7 +12,7 @@ import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
 import { geolocateIpTool } from '@/mcp-server/tools/definitions/geolocate-ip.tool.js';
-import { initGeoService } from '@/services/geo/geo-service.js';
+import { GEO_FIELD_MAX_LENGTH, initGeoService } from '@/services/geo/geo-service.js';
 
 const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
 vi.mock('node:dns/promises', () => ({ lookup: lookupMock }));
@@ -55,6 +55,7 @@ describe('toolkit_geolocate_ip', () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     resetServerConfig();
   });
 
@@ -105,6 +106,43 @@ describe('toolkit_geolocate_ip', () => {
   it('rejects a missing target field', () => {
     expect(geolocateIpTool.input.safeParse({}).success).toBe(false);
   });
+
+  it('surfaces the provider quality flags and still conforms to the schema', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ ...FULL_PAYLOAD, proxy: true, hosting: true, mobile: false }),
+        ),
+    );
+    const result = await run({ target: '8.8.8.8' });
+    expect(result).toMatchObject({ proxy: true, hosting: true, mobile: false });
+    expect(result).toEqual(expect.schemaMatching(geolocateIpTool.output));
+  });
+
+  it('reports ip-api as the source even with an ambient provider env var set', async () => {
+    vi.stubEnv('TOOLKIT_GEO_PROVIDER', 'claimed-alternate-provider');
+    resetServerConfig();
+    initGeoService();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD)));
+    const result = await run({ target: '8.8.8.8' });
+    expect(result.source).toBe('ip-api');
+  });
+});
+
+describe('toolkit_geolocate_ip output schema', () => {
+  const base = { target: '8.8.8.8', resolvedIp: '8.8.8.8', source: 'ip-api' };
+
+  it.each(['country', 'countryCode', 'region', 'city', 'org', 'asn', 'timezone'])(
+    'caps %s at the enforced ceiling',
+    (field) => {
+      const atCeiling = { ...base, [field]: 'x'.repeat(GEO_FIELD_MAX_LENGTH) };
+      const overCeiling = { ...base, [field]: 'x'.repeat(GEO_FIELD_MAX_LENGTH + 1) };
+      expect(geolocateIpTool.output.safeParse(atCeiling).success).toBe(true);
+      expect(geolocateIpTool.output.safeParse(overCeiling).success).toBe(false);
+    },
+  );
 });
 
 describe('toolkit_geolocate_ip format()', () => {
@@ -121,9 +159,15 @@ describe('toolkit_geolocate_ip format()', () => {
       asn: 'AS15169',
       org: 'Google LLC',
       timezone: 'America/Los_Angeles',
+      proxy: false,
+      hosting: true,
+      mobile: false,
       source: 'ip-api',
     });
     const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('**Proxy/VPN:** false');
+    expect(text).toContain('**Hosting:** true');
+    expect(text).toContain('**Mobile:** false');
     expect(text).toContain('dns.google');
     expect(text).toContain('8.8.8.8');
     expect(text).toContain('Mountain View');
@@ -150,5 +194,9 @@ describe('toolkit_geolocate_ip format()', () => {
     // Honest absence — no invented coordinates or ASN.
     expect(text).not.toMatch(/Coordinates:\*\* [\d-]/);
     expect(text).toContain('**ASN:** _unknown_');
+    // A flag the provider never reported renders unknown, not a fabricated false.
+    expect(text).toContain('**Proxy/VPN:** _unknown_');
+    expect(text).toContain('**Hosting:** _unknown_');
+    expect(text).toContain('**Mobile:** _unknown_');
   });
 });

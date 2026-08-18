@@ -16,7 +16,7 @@ This doc formalizes `docs/idea.md` into a buildable spec. The tool names are fix
 | `toolkit_generate_id` | Mint cryptographically-random identifiers (UUIDv4/UUIDv7/ULID), single or batch. | `false`¹ | `false` | `type` (`uuid_v4`\|`uuid_v7`\|`ulid`), `count` | `{ type, ids[], count }` |
 | `toolkit_generate_qr` | Encode text/URL into a QR code as SVG markup, base64 PNG bytes, or a terminal-renderable string. | `true` | `false` | `data`, `format` (`svg`\|`png_base64`\|`terminal`), `errorCorrection`, `margin`, `scale` | `{ format, content, mimeType?, byteLength?, version }` |
 | `toolkit_encode_value` | Encode or decode a value across base64 / base64url / hex / URL. | `true` | `false` | `operation` (`encode`\|`decode`), `encoding`, `value` | `{ encoding, operation, result }` |
-| `toolkit_geolocate_ip` | Resolve a public IP (or hostname) to geographic and network metadata via an external geo API. | `true` | `true` | `target` (IPv4/IPv6/hostname) | `{ target, resolvedIp, country, countryCode, region, city, latitude, longitude, asn, org, timezone, source }` |
+| `toolkit_geolocate_ip` | Resolve a public IP (or hostname) to geographic and network metadata via an external geo API. | `true` | `true` | `target` (IPv4/IPv6/hostname) | `{ target, resolvedIp, country, countryCode, region, city, latitude, longitude, asn, org, timezone, proxy, hosting, mobile, source }` |
 | `toolkit_check_network` | **Gated.** Network diagnostics — ping, traceroute, TCP connectivity, or host egress-IP detection. | `true` | `true` | `mode` (`ping`\|`traceroute`\|`connectivity`\|`public_ip`), `target` (required for all modes except `public_ip`), `port` (connectivity only), `count`, `timeoutMs` | `{ mode, target?, reachable?, hops?, rttMs?, publicIp? }` |
 | `toolkit_check_system` | **Gated.** Host system facts — OS, CPU, memory, load average, or network interfaces. | `true` | `false` | `what` (`os`\|`cpu`\|`memory`\|`load`\|`interfaces`) | `{ what, ...facetFields }` |
 
@@ -70,6 +70,7 @@ Primary agent workflows: "give me 5 ULIDs for these records", "turn this URL int
 
 - **Fail-closed.** Enable-flags default `false`. The hosted profile sets none → only the five always-on tools exist.
 - **Two-tier network gate.** Even with net-diag enabled, private/reserved destinations need the second explicit `TOOLKIT_ALLOW_PRIVATE_NETWORK` gate. This blocks the cloud-metadata endpoint (`169.254.169.254`) and internal-`10.x`/`172.16/12`/`192.168` recon vectors.
+- **Range coverage is a denylist for IPv4 and an allowlist for IPv6.** IPv4 enumerates the IANA special-use blocks; IPv6 admits only `2000::/3` minus the special-use blocks carved out of it (6to4, Teredo, ORCHID/ORCHIDv2, documentation, benchmarking), so unallocated and future-assigned space classifies as reserved instead of slipping through a forgotten denylist entry. IPv4-mapped addresses are classified by their embedded IPv4 in either the dotted (`::ffff:127.0.0.1`) or hex (`::ffff:7f00:1`) spelling.
 - **Runtime split (mirror whois).** `toolkit_check_network` (raw sockets / ICMP) and `toolkit_check_system` (`os`/`process`) are **Node-only**. The Cloudflare Workers build carries only hash + id + encode + qr + geolocate (all HTTPS / pure-compute). Document so the Workers path isn't expected to diagnose networks.
 - **Resilience scoped to the one external dep.** Geolocation gets retry/backoff/cache; everything else is local and synchronous, no resilience layer.
 - **Zero-config hosted profile.** Pick a keyless-tier geo provider (ip-api class) so the hosted deployment needs no API key.
@@ -155,7 +156,7 @@ type GeoResult = {
 };
 ```
 
-**Network identifiers.** Targets are caller-supplied IPv4/IPv6/hostnames — validated by Zod via `z.union([z.string().ip(), z.string().regex(/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/)])` (covers both raw IPs and valid hostnames; rejects bare single-label strings that could alias metadata endpoints). Never minted here. The agent obtains them from its own context (a log line, a URL, a prior tool); the server adds no resolver step beyond `geolocate`/`check_network` doing their own DNS. The private-range guard runs **after** DNS resolution so a hostname can't smuggle a private IP past the Zod validator.
+**Network identifiers.** Targets are caller-supplied IPv4/IPv6/hostnames — validated by Zod via `z.union([z.ipv4(), z.ipv6(), z.string().regex(/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/)])` (covers both raw IPs and valid hostnames; rejects bare single-label strings that could alias metadata endpoints). Never minted here. The agent obtains them from its own context (a log line, a URL, a prior tool); the server adds no resolver step beyond `geolocate`/`check_network` doing their own DNS. The private-range guard runs **after** DNS resolution so a hostname can't smuggle a private IP past the Zod validator.
 
 ---
 
@@ -199,13 +200,14 @@ Server-specific env vars live in `src/config/server-config.ts` as a lazy-parsed 
 | `TOOLKIT_ENABLE_NET_DIAGNOSTICS` | No | `false` | Registers `toolkit_check_network`. Off → tool absent from `tools/list`. |
 | `TOOLKIT_ENABLE_SYSTEM_INFO` | No | `false` | Registers `toolkit_check_system`. Off → tool absent. |
 | `TOOLKIT_ALLOW_PRIVATE_NETWORK` | No | `false` | (net-diag on) permits private/reserved/loopback/link-local targets — the **second** explicit gate. Off → such targets are rejected even with net-diag enabled. |
-| `TOOLKIT_GEO_PROVIDER` | No | `ip-api` | Geolocation provider id. Default is the keyless tier — zero-config hosted profile. |
-| `TOOLKIT_GEO_API_KEY` | No | — | API key, **if** the chosen provider needs one. Absent + keyless provider → degrades to the rate-limited free tier (still functional). Absent + key-required provider → `geolocate` throws a `ConfigurationError`-class startup/first-call failure naming the variable. |
-| `TOOLKIT_GEO_BASE_URL` | No | `http://ip-api.com` | Base URL for the geo provider. Override to point at an ip-api pro endpoint or an alternate keyless-compatible provider. |
+| `TOOLKIT_GEO_API_KEY` | No | — | API key, **if** the configured endpoint needs one. Absent → the keyless ip-api tier, rate-limited but fully functional. |
+| `TOOLKIT_GEO_BASE_URL` | No | `http://ip-api.com` | Base URL for an **ip-api-compatible** endpoint — the request path and response shape are always ip-api's. Override to point at an ip-api pro endpoint or a self-hosted compatible one. The default is plaintext HTTP; ip-api's HTTPS endpoint requires a paid key. |
 | `TOOLKIT_GEO_CACHE_TTL_SECONDS` | No | `3600` | GeoService cache TTL. |
 | `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | No | `45` | Max geo-API requests per minute before the backoff slows. Default matches ip-api free tier (~45 req/min). Raise when using a keyed or higher-tier provider. |
 
-**Degraded behavior without keys:** the default (`ip-api`, no key) is fully functional at the free rate limit. A key only raises the ceiling or unlocks a richer provider. Nothing else in the server takes config — the four pure-compute tools are zero-config by construction.
+**One provider protocol.** There is no provider-selector variable: `GeoService` speaks ip-api and reports `source: "ip-api"` from a fixed literal, so provenance cannot be misstated by configuration. A second provider would arrive as an adapter layer with its own request/response mapping, and could reintroduce a constrained choice then.
+
+**Degraded behavior without keys:** the default (`ip-api`, no key) is fully functional at the free rate limit. A key only raises the ceiling. Nothing else in the server takes config — the four pure-compute tools are zero-config by construction.
 
 Standard framework env vars (`MCP_TRANSPORT_TYPE`, `MCP_HTTP_*`, `MCP_AUTH_MODE`, `MCP_LOG_LEVEL`) are unchanged from the scaffold.
 

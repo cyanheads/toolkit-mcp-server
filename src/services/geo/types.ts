@@ -29,6 +29,12 @@ export type GeoResult = {
   org?: string;
   /** IANA timezone, e.g. "America/Los_Angeles". */
   timezone?: string;
+  /** True when the address is a known proxy, VPN, or Tor exit. Absent when unreported. */
+  proxy?: boolean;
+  /** True when the address belongs to a hosting or datacenter network. Absent when unreported. */
+  hosting?: boolean;
+  /** True when the address belongs to a mobile carrier network. Absent when unreported. */
+  mobile?: boolean;
   /** Provider that answered, e.g. "ip-api". */
   source: string;
 };

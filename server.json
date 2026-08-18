@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/toolkit-mcp-server",
     "source": "github"
   },
-  "version": "2.0.1",
+  "version": "2.1.0",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/toolkit-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -60,22 +60,15 @@
           "default": "false"
         },
         {
-          "name": "TOOLKIT_GEO_PROVIDER",
-          "description": "IP-geolocation provider id. Default 'ip-api' is the keyless free tier.",
-          "format": "string",
-          "isRequired": false,
-          "default": "ip-api"
-        },
-        {
           "name": "TOOLKIT_GEO_API_KEY",
-          "description": "API key for the geolocation provider, if it requires one. The default ip-api tier is keyless.",
+          "description": "API key for the geolocation endpoint, if it requires one. The default ip-api tier is keyless.",
           "format": "string",
           "isRequired": false,
           "isSecret": true
         },
         {
           "name": "TOOLKIT_GEO_BASE_URL",
-          "description": "Base URL for the geolocation provider. Default is the keyless ip-api endpoint.",
+          "description": "Base URL for an ip-api-compatible geolocation endpoint. Default is the keyless ip-api endpoint, which is plaintext HTTP.",
           "format": "string",
           "isRequired": false,
           "default": "http://ip-api.com"
@@ -104,7 +97,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/toolkit-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -173,22 +166,15 @@
           "default": "false"
         },
         {
-          "name": "TOOLKIT_GEO_PROVIDER",
-          "description": "IP-geolocation provider id. Default 'ip-api' is the keyless free tier.",
-          "format": "string",
-          "isRequired": false,
-          "default": "ip-api"
-        },
-        {
           "name": "TOOLKIT_GEO_API_KEY",
-          "description": "API key for the geolocation provider, if it requires one. The default ip-api tier is keyless.",
+          "description": "API key for the geolocation endpoint, if it requires one. The default ip-api tier is keyless.",
           "format": "string",
           "isRequired": false,
           "isSecret": true
         },
         {
           "name": "TOOLKIT_GEO_BASE_URL",
-          "description": "Base URL for the geolocation provider. Default is the keyless ip-api endpoint.",
+          "description": "Base URL for an ip-api-compatible geolocation endpoint. Default is the keyless ip-api endpoint, which is plaintext HTTP.",
           "format": "string",
           "isRequired": false,
           "default": "http://ip-api.com"

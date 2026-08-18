@@ -7,13 +7,13 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { getGeoService } from '@/services/geo/geo-service.js';
+import { GEO_FIELD_MAX_LENGTH, getGeoService } from '@/services/geo/geo-service.js';
 import { NetworkTargetSchema } from '@/services/network/target.js';
 
 export const geolocateIpTool = tool('toolkit_geolocate_ip', {
   title: 'toolkit-mcp-server: geolocate IP',
   description:
-    'Resolve a public IP address (or hostname) to geographic and network metadata: country, region, city, latitude/longitude, the owning ASN and organization, and timezone. target accepts an IPv4/IPv6 address or a hostname — a hostname is DNS-resolved first and the resolvedIp field echoes which IP was actually located. The provider is called directly (never the target), so this is SSRF-free and safe to expose anywhere. Results are best-effort and provider-bounded: VPNs, proxies, mobile NAT, and anycast all defeat IP-to-location, accuracy is city-level at best, and many fields can be absent for reserved or thinly-documented ranges — absent fields are reported as unknown, never invented. Private/reserved addresses have no public geolocation and are rejected. The source field names which provider answered.',
+    'Resolve a public IP address (or hostname) to geographic and network metadata: country, region, city, latitude/longitude, the owning ASN and organization, timezone, and the proxy/hosting/mobile quality flags. target accepts an IPv4/IPv6 address or a hostname — a hostname is DNS-resolved first and the resolvedIp field echoes which IP was actually located. The provider is called directly (never the target), so this is SSRF-free and safe to expose anywhere. Results are best-effort and provider-bounded: VPNs, proxies, mobile NAT, and anycast all defeat IP-to-location, accuracy is city-level at best, and many fields can be absent for reserved or thinly-documented ranges — absent fields are reported as unknown, never invented. Read proxy, hosting, and mobile before trusting the coordinates: a true on any of them means the location describes infrastructure, not the user. Private/reserved addresses have no public geolocation and are rejected. The source field names which provider answered.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     target: NetworkTargetSchema,
@@ -27,28 +27,59 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
       ),
     country: z
       .string()
+      .max(GEO_FIELD_MAX_LENGTH)
       .optional()
       .describe('Country name. Absent when the provider does not report it.'),
     countryCode: z
       .string()
+      .max(GEO_FIELD_MAX_LENGTH)
       .optional()
       .describe('ISO 3166-1 alpha-2 country code. Absent when unknown.'),
-    region: z.string().optional().describe('Region or state name. Absent when unknown.'),
-    city: z.string().optional().describe('City name. Absent when unknown.'),
+    region: z
+      .string()
+      .max(GEO_FIELD_MAX_LENGTH)
+      .optional()
+      .describe('Region or state name. Absent when unknown.'),
+    city: z
+      .string()
+      .max(GEO_FIELD_MAX_LENGTH)
+      .optional()
+      .describe('City name. Absent when unknown.'),
     latitude: z.number().optional().describe('Latitude in decimal degrees. Absent when unknown.'),
     longitude: z.number().optional().describe('Longitude in decimal degrees. Absent when unknown.'),
     asn: z
       .string()
+      .max(GEO_FIELD_MAX_LENGTH)
       .optional()
       .describe('Autonomous System number, e.g. "AS15169". Absent on providers that omit it.'),
     org: z
       .string()
+      .max(GEO_FIELD_MAX_LENGTH)
       .optional()
       .describe('Owning organization or ISP, e.g. "Google LLC". Absent when unknown.'),
     timezone: z
       .string()
+      .max(GEO_FIELD_MAX_LENGTH)
       .optional()
       .describe('IANA timezone, e.g. "America/Los_Angeles". Absent when unknown.'),
+    proxy: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when the address is a known proxy, VPN, or Tor exit — the location describes the exit node, not the user. Absent when the provider does not report it.',
+      ),
+    hosting: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when the address belongs to a hosting or datacenter network, so the location is a facility rather than a person. Absent when unreported.',
+      ),
+    mobile: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when the address belongs to a mobile carrier network, where NAT can place the location far from the device. Absent when unreported.',
+      ),
     source: z.string().describe('The provider that answered the lookup, e.g. "ip-api".'),
   }),
 
@@ -88,6 +119,7 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
       `**Timezone:** ${result.timezone ?? unknown}`,
       `**ASN:** ${result.asn ?? unknown} | **Org:** ${result.org ?? unknown}`,
       `**Country code:** ${result.countryCode ?? unknown}`,
+      `**Proxy/VPN:** ${result.proxy ?? unknown} | **Hosting:** ${result.hosting ?? unknown} | **Mobile:** ${result.mobile ?? unknown}`,
       `**Source:** ${result.source}`,
     ];
     return [{ type: 'text', text: lines.join('\n') }];

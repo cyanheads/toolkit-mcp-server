@@ -1,6 +1,6 @@
 /**
  * @fileoverview Server-specific configuration for toolkit-mcp-server.
- * Holds the security gate flags (fail-closed) and geolocation provider settings.
+ * Holds the security gate flags (fail-closed) and geolocation endpoint settings.
  * Lazy-parsed via `parseEnvConfig` so env-var names appear in validation errors
  * and Workers can inject env at request time.
  * @module config/server-config
@@ -34,22 +34,19 @@ const ServerConfigSchema = z.object({
     .describe(
       'Permit private/reserved/loopback/link-local network targets in toolkit_check_network. The second explicit gate for local-network diagnostics.',
     ),
-  /** Geolocation provider id. Default `ip-api` is keyless (zero-config hosted profile). */
-  geoProvider: z
-    .string()
-    .default('ip-api')
-    .describe('Geolocation provider id. Default "ip-api" is the keyless free tier.'),
-  /** Optional API key for providers that require one. */
+  /** Optional API key for the geolocation endpoint. */
   geoApiKey: z
     .string()
     .optional()
-    .describe('API key for the geolocation provider, if it requires one.'),
-  /** Base URL override for the geo provider (e.g. an ip-api pro endpoint). */
+    .describe('API key for the geolocation endpoint, if it requires one.'),
+  /** Base URL override for an ip-api-compatible endpoint (e.g. an ip-api pro endpoint). */
   geoBaseUrl: z
     .string()
     .url()
     .default('http://ip-api.com')
-    .describe('Base URL for the geolocation provider. Default is the keyless ip-api endpoint.'),
+    .describe(
+      'Base URL for an ip-api-compatible geolocation endpoint. Default is the keyless plaintext-HTTP ip-api endpoint.',
+    ),
   /** GeoService in-memory cache TTL, in seconds. */
   geoCacheTtlSeconds: z.coerce
     .number()
@@ -78,7 +75,6 @@ export function getServerConfig(): ServerConfig {
     enableNetDiagnostics: 'TOOLKIT_ENABLE_NET_DIAGNOSTICS',
     enableSystemInfo: 'TOOLKIT_ENABLE_SYSTEM_INFO',
     allowPrivateNetwork: 'TOOLKIT_ALLOW_PRIVATE_NETWORK',
-    geoProvider: 'TOOLKIT_GEO_PROVIDER',
     geoApiKey: 'TOOLKIT_GEO_API_KEY',
     geoBaseUrl: 'TOOLKIT_GEO_BASE_URL',
     geoCacheTtlSeconds: 'TOOLKIT_GEO_CACHE_TTL_SECONDS',

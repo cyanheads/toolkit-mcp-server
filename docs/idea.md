@@ -68,7 +68,7 @@ Fail-closed: these are **enable** flags defaulting off, not disable flags defaul
 | `TOOLKIT_ENABLE_NET_DIAGNOSTICS` | `false` | Registers `toolkit_check_network` |
 | `TOOLKIT_ENABLE_SYSTEM_INFO` | `false` | Registers `toolkit_check_system` |
 | `TOOLKIT_ALLOW_PRIVATE_NETWORK` | `false` | (net-diag on) permits private/reserved/loopback targets — the second, explicit gate for legit local-network diagnostics |
-| `TOOLKIT_GEO_PROVIDER` / key | — | Geolocation provider + key, if the chosen API needs one |
+| `TOOLKIT_GEO_API_KEY` | — | Key for the ip-api-compatible geolocation endpoint, if it needs one |
 
 ## Design Notes
 

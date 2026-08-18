@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.0.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.1.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.30.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -89,10 +89,12 @@ Encode or decode a value, in either direction.
 Resolve a public IP or hostname to geographic and network metadata.
 
 - Returns country, region, city, latitude/longitude, ASN, owning organization, and timezone
+- `proxy`, `hosting`, and `mobile` flag when the address is a proxy/VPN/Tor exit, a datacenter network, or a mobile carrier — a `true` on any of them means the coordinates describe infrastructure, not a person. Absent when the provider doesn't report them
 - A hostname is DNS-resolved first; `resolvedIp` echoes the IP actually located, and `source` names the answering provider
 - SSRF-free — the server calls the provider, never the target; the resolved IP is re-checked against private ranges, and private/reserved addresses are rejected (they have no public geolocation)
 - Best-effort and provider-bounded: VPNs, proxies, mobile NAT, and anycast all defeat IP-to-location, accuracy is city-level at best, and absent fields are reported as unknown rather than invented
-- Keyless by default (ip-api free tier); results are cached in memory by resolved IP
+- Provider-supplied strings are truncated and stripped of control characters before they reach the response, so registry-controlled text (`org`, `isp`, `as`) cannot flood or format a model's context
+- Keyless by default (ip-api free tier, which is plaintext HTTP — see `TOOLKIT_GEO_BASE_URL`); results are cached in memory by resolved IP under a fixed entry cap
 
 ---
 
@@ -258,9 +260,8 @@ Every variable is optional. Server-specific options are validated at startup via
 | `TOOLKIT_ENABLE_NET_DIAGNOSTICS` | Register the gated `toolkit_check_network` tool. Leave off for hosted or shared deployments. | `false` |
 | `TOOLKIT_ENABLE_SYSTEM_INFO` | Register the gated `toolkit_check_system` tool. Meaningful only on a local or self-hosted deployment. | `false` |
 | `TOOLKIT_ALLOW_PRIVATE_NETWORK` | With network diagnostics on, permit private/reserved/loopback targets. The second explicit gate. | `false` |
-| `TOOLKIT_GEO_PROVIDER` | IP-geolocation provider id. The default `ip-api` tier is keyless. | `ip-api` |
-| `TOOLKIT_GEO_API_KEY` | API key for the geolocation provider, if it requires one. | none |
-| `TOOLKIT_GEO_BASE_URL` | Base URL for the geolocation provider. | `http://ip-api.com` |
+| `TOOLKIT_GEO_API_KEY` | API key for the geolocation endpoint, if it requires one. | none |
+| `TOOLKIT_GEO_BASE_URL` | Base URL for an ip-api-compatible geolocation endpoint. The default is plaintext HTTP — ip-api's HTTPS endpoint is not part of the keyless free tier and answers `403 SSL unavailable for this endpoint` without a paid key. Point this at an HTTPS endpoint (with `TOOLKIT_GEO_API_KEY`) to encrypt the provider request. | `http://ip-api.com` |
 | `TOOLKIT_GEO_CACHE_TTL_SECONDS` | In-memory geolocation cache TTL in seconds. | `3600` |
 | `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation requests per minute. | `45` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |

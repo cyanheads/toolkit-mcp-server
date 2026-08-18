@@ -3,7 +3,8 @@
  * ip-api provider is stubbed at the global `fetch` boundary (the service calls
  * fetchWithTimeout WITHOUT rejectPrivateIPs, so no real DNS/network is touched),
  * and node:dns/promises is mocked for hostname resolution. Covers the happy path,
- * sparse upstream payloads, hostname → resolvedIp echo, the cache, and every
+ * sparse upstream payloads, hostname → resolvedIp echo, the bounded cache, fixed
+ * provenance, the bound-and-strip of provider-supplied strings, and every
  * failure reason (unresolvable_host, private_target via guard and via provider
  * envelope), plus the sanitized non-OK upstream response — asserting no upstream
  * internals (URL, status, response body, requestId) reach the client.
@@ -14,7 +15,12 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
-import { getGeoService, initGeoService } from '@/services/geo/geo-service.js';
+import {
+  GEO_CACHE_MAX_ENTRIES,
+  GEO_FIELD_MAX_LENGTH,
+  getGeoService,
+  initGeoService,
+} from '@/services/geo/geo-service.js';
 
 const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
 vi.mock('node:dns/promises', () => ({ lookup: lookupMock }));
@@ -150,7 +156,7 @@ describe('GeoService', () => {
     expect(result.target).toBe('dns.google'); // echoes the supplied target
     expect(result.resolvedIp).toBe('8.8.8.8'); // but reports which IP was located
     // The provider is queried for the resolved IP, never the hostname.
-    expect((fetchMock.mock.calls[0]?.[0] as string).toString()).toContain('8.8.8.8');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('8.8.8.8');
   });
 
   it('throws unresolvable_host when a hostname does not resolve', async () => {
@@ -278,9 +284,177 @@ describe('GeoService', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD));
     vi.stubGlobal('fetch', fetchMock);
     await lookup('8.8.8.8');
-    const calledUrl = (fetchMock.mock.calls[0]?.[0] as string).toString();
+    const calledUrl = String(fetchMock.mock.calls[0]?.[0]);
     expect(calledUrl).toContain('pro.ip-api.example');
     expect(calledUrl).toContain('key=secret-key');
+  });
+
+  it('rejects a hex-form IPv4-mapped private target locally, without contacting the provider', async () => {
+    // The dotted spelling (::ffff:127.0.0.1) has always been rejected here; the
+    // hex tail carries the same 32 bits and must not reach the provider either.
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(lookup('::ffff:7f00:1')).rejects.toMatchObject({
+      data: { reason: 'private_target' },
+    });
+    await expect(lookup('::ffff:a9fe:a9fe')).rejects.toMatchObject({
+      data: { reason: 'private_target' },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('bounds cache growth across distinct resolved IPs, evicting the oldest entry', async () => {
+    // The rate limiter throttles provider calls, not cache entries — raise it so
+    // the cap under test is the cache bound and nothing else.
+    vi.stubEnv('TOOLKIT_GEO_RATE_LIMIT_PER_MIN', String(GEO_CACHE_MAX_ENTRIES * 2));
+    resetServerConfig();
+    initGeoService();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // 9.0.0.0/8 is routable public space, so every address clears the guard.
+    const ipAt = (i: number) => `9.0.${(i >> 8) & 0xff}.${i & 0xff}`;
+    for (let i = 0; i < GEO_CACHE_MAX_ENTRIES; i++) await lookup(ipAt(i));
+    expect(fetchMock).toHaveBeenCalledTimes(GEO_CACHE_MAX_ENTRIES);
+
+    // At exactly the cap nothing has been dropped yet — the first IP still hits.
+    await lookup(ipAt(0));
+    expect(fetchMock).toHaveBeenCalledTimes(GEO_CACHE_MAX_ENTRIES);
+
+    // One entry past the cap evicts the oldest rather than growing the Map.
+    const overflowIp = ipAt(GEO_CACHE_MAX_ENTRIES);
+    await lookup(overflowIp);
+    expect(fetchMock).toHaveBeenCalledTimes(GEO_CACHE_MAX_ENTRIES + 1);
+
+    // The evicted first IP re-fetches; the newest entry is still resident.
+    await lookup(ipAt(0));
+    expect(fetchMock).toHaveBeenCalledTimes(GEO_CACHE_MAX_ENTRIES + 2);
+    await lookup(overflowIp);
+    expect(fetchMock).toHaveBeenCalledTimes(GEO_CACHE_MAX_ENTRIES + 2);
+  });
+
+  it('reports ip-api as the source regardless of any ambient provider env var', async () => {
+    vi.stubEnv('TOOLKIT_GEO_PROVIDER', 'claimed-alternate-provider');
+    resetServerConfig();
+    initGeoService();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD)));
+    const result = await lookup('8.8.8.8');
+    expect(result.source).toBe('ip-api');
+  });
+
+  it('names ip-api in the sanitized provider-failure message, never an env value', async () => {
+    vi.stubEnv('TOOLKIT_GEO_PROVIDER', 'claimed-alternate-provider');
+    resetServerConfig();
+    initGeoService();
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({}, 503)));
+      const settled = lookup('8.8.8.8').catch((e: unknown) => e);
+      await vi.runAllTimersAsync();
+      const error = (await settled) as { message?: string };
+      expect(error.message).toContain('ip-api');
+      expect(error.message).not.toContain('claimed-alternate-provider');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces the ip-api proxy / hosting / mobile flags', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ ...FULL_PAYLOAD, proxy: true, hosting: true, mobile: false }),
+        ),
+    );
+    const result = await lookup('8.8.8.8');
+    expect(result.proxy).toBe(true);
+    expect(result.hosting).toBe(true);
+    expect(result.mobile).toBe(false);
+  });
+
+  it('requests the proxy / hosting / mobile fields from the provider', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD));
+    vi.stubGlobal('fetch', fetchMock);
+    await lookup('8.8.8.8');
+    const calledUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(calledUrl).toContain('proxy');
+    expect(calledUrl).toContain('hosting');
+    expect(calledUrl).toContain('mobile');
+  });
+
+  it('leaves the proxy / hosting / mobile flags undefined when the provider omits them', async () => {
+    // FULL_PAYLOAD carries none of the three — absence must not become `false`.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD)));
+    const result = await lookup('8.8.8.8');
+    expect(result.proxy).toBeUndefined();
+    expect(result.hosting).toBeUndefined();
+    expect(result.mobile).toBeUndefined();
+    expect(result).not.toHaveProperty('proxy');
+  });
+
+  it('bounds and strips provider-supplied strings before they enter the result', async () => {
+    const oversized = 'A'.repeat(GEO_FIELD_MAX_LENGTH * 4);
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: 'success',
+        country: 'United\u000aStates\u0000',
+        countryCode: 'US',
+        regionName: 'Cali\u001bfornia',
+        city: 'Mountain\u000d\u000aView',
+        timezone: 'America/Los_Angeles',
+        org: oversized,
+        as: `AS15169 ${oversized}`,
+        query: '8.8.8.8',
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await lookup('8.8.8.8');
+
+    expect(result.org?.length).toBe(GEO_FIELD_MAX_LENGTH);
+    expect(result.asn).toBe('AS15169');
+    // Control characters and newlines never reach the model-facing surfaces.
+    const strings = [result.country, result.region, result.city, result.org, result.asn].join('|');
+    expect(strings).not.toMatch(/[\u0000-\u001f\u007f]/);
+    // A control run collapses to a single space, so words stay separated rather
+    // than being welded together by a bare strip.
+    expect(result.country).toBe('United States');
+    expect(result.region).toBe('Cali fornia');
+    expect(result.city).toBe('Mountain View');
+
+    // The cached entry holds the bounded values, not the raw oversized payload.
+    const cached = await lookup('8.8.8.8');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cached.org?.length).toBe(GEO_FIELD_MAX_LENGTH);
+  });
+
+  it('bounds the provider fail-envelope message before it reaches the client', async () => {
+    const oversized = `reserved range \u000a\u000a# Injected heading ${'C'.repeat(GEO_FIELD_MAX_LENGTH * 4)}`;
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ status: 'fail', message: oversized, query: '45.33.32.156' }),
+        ),
+    );
+    const error = (await lookup('45.33.32.156').catch((e: unknown) => e)) as { message: string };
+    expect(error.message).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(error.message.length).toBeLessThan(GEO_FIELD_MAX_LENGTH * 2);
+  });
+
+  it('bounds the asn fallback path when `as` does not match the AS<digits> pattern', async () => {
+    const oversized = `not-an-asn ${'B'.repeat(GEO_FIELD_MAX_LENGTH * 4)}`;
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ status: 'success', as: oversized, query: '8.8.8.8' })),
+    );
+    const result = await lookup('8.8.8.8');
+    expect(result.asn?.length).toBe(GEO_FIELD_MAX_LENGTH);
+    expect(result.asn).toBe(oversized.slice(0, GEO_FIELD_MAX_LENGTH));
   });
 });
 
