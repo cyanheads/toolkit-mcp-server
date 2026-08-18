@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.2.0](changelog/2.2.x/2.2.0.md) — 2026-08-18 · 🛡️ Security
+
+Windows ping/traceroute fixed, unreachable errors gain their recovery hint, egress-IP failures sanitized, generate_id's read-only annotation corrected, generate_qr adds an image content block and a 2048px raster budget, and encode_value's decoded output can no longer break its Markdown fence.
+
 ## [2.1.0](changelog/2.1.x/2.1.0.md) — 2026-08-18 · ⚠️ Breaking · 🛡️ Security
 
 IPv6 private-range guard flipped from denylist to allowlist, provider strings bounded and sanitized, geolocate_ip gains proxy/hosting/mobile flags, geo cache bounded, and TOOLKIT_GEO_PROVIDER removed as a phantom config.

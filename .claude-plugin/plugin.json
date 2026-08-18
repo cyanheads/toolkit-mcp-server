@@ -1,6 +1,6 @@
 {
   "name": "toolkit-mcp-server",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Fast developer utilities — random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics.",
   "author": {
     "name": "cyanheads"

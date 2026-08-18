@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/toolkit-mcp-server",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "mcpName": "io.github.cyanheads/toolkit-mcp-server",
   "description": "Generate random IDs, QR codes, and hashes, encode and decode values, and geolocate IPs, plus gated network and system diagnostics, via MCP. STDIO or Streamable HTTP.",
   "type": "module",

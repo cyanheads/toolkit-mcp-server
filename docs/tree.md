@@ -1,6 +1,6 @@
 # toolkit-mcp-server - Directory Structure
 
-Generated on: 2026-08-18 12:50:47
+Generated on: 2026-08-18 13:30:06
 
 ```text
 toolkit-mcp-server/
@@ -24,6 +24,7 @@ toolkit-mcp-server/
 ├── changelog/
 │   ├── 2.0.x/
 │   ├── 2.1.x/
+│   ├── 2.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -158,6 +159,7 @@ toolkit-mcp-server/
 │   ├── services/
 │   │   ├── geo-service.test.ts
 │   │   ├── net-diag-gate.test.ts
+│   │   ├── net-diag-service.test.ts
 │   │   └── network-target.test.ts
 │   └── tools/
 │       ├── check-network.tool.test.ts
