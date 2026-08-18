@@ -41,7 +41,7 @@ export class NetDiagService {
    * is the single chokepoint every target-bearing mode passes through.
    */
   private async guardTarget(target: string, ctx: Context): Promise<string> {
-    const resolvedIp = isIP(target) !== 0 ? target : await this.resolve(target);
+    const resolvedIp = isIP(target) !== 0 ? target : await this.resolve(target, ctx);
     if (isPrivateOrReservedIp(resolvedIp) && !getServerConfig().allowPrivateNetwork) {
       throw validationError(`${target} (${resolvedIp}) is a private/reserved address.`, {
         reason: 'private_target_blocked',
@@ -52,12 +52,15 @@ export class NetDiagService {
   }
 
   /** DNS-resolve a hostname; an unresolvable host is an upstream-class failure. */
-  private async resolve(target: string): Promise<string> {
+  private async resolve(target: string, ctx: Context): Promise<string> {
     try {
       const { address } = await lookup(target);
       return address;
     } catch {
-      throw serviceUnavailable(`Could not resolve "${target}".`, { reason: 'unreachable' });
+      throw serviceUnavailable(`Could not resolve "${target}".`, {
+        reason: 'unreachable',
+        ...ctx.recoveryFor('unreachable'),
+      });
     }
   }
 
@@ -95,18 +98,25 @@ export class NetDiagService {
     ctx: Context,
   ): Promise<NetDiagResult> {
     const deadlineSec = Math.max(1, Math.ceil((timeoutMs * count) / 1000));
-    // -c count is common to BSD/macOS and Linux ping. macOS: -t deadline(s); Linux: -w deadline(s).
-    const timeoutFlag =
-      process.platform === 'linux' ? ['-w', String(deadlineSec)] : ['-t', String(deadlineSec)];
+    // Three incompatible flag sets. BSD/macOS and Linux share -c count and differ
+    // on the deadline flag (-t vs -w, both seconds); Windows takes -n count and
+    // -w as a PER-REPLY timeout in milliseconds and rejects -c outright, which
+    // would exit non-zero and report a live host as down.
+    const args =
+      process.platform === 'win32'
+        ? ['-n', String(count), '-w', String(timeoutMs), resolvedIp]
+        : [
+            '-c',
+            String(count),
+            process.platform === 'linux' ? '-w' : '-t',
+            String(deadlineSec),
+            resolvedIp,
+          ];
     try {
-      const { stdout } = await execFileAsync(
-        'ping',
-        ['-c', String(count), ...timeoutFlag, resolvedIp],
-        {
-          timeout: timeoutMs * count + 2000,
-          signal: ctx.signal,
-        },
-      );
+      const { stdout } = await execFileAsync('ping', args, {
+        timeout: timeoutMs * count + 2000,
+        signal: ctx.signal,
+      });
       const rttMs = this.parsePingRtt(stdout);
       ctx.log.info('Ping', { target, reachable: true, rttMs });
       return { mode: 'ping', target, reachable: true, ...(rttMs != null && { rttMs }) };
@@ -117,11 +127,14 @@ export class NetDiagService {
     }
   }
 
-  /** Parse the average RTT (ms) from ping summary output (BSD or Linux format). */
+  /** Parse the average RTT (ms) from ping summary output (BSD, Linux, or Windows). */
   private parsePingRtt(stdout: string): number | undefined {
     // "round-trip min/avg/max/stddev = 0.05/0.07/0.09/0.01 ms" or "rtt min/avg/max/mdev = ..."
     const summary = stdout.match(/=\s*[\d.]+\/([\d.]+)\//);
     if (summary?.[1]) return Number.parseFloat(summary[1]);
+    // Windows reports the same average as a labelled line: "Average = 11ms".
+    const windowsAverage = stdout.match(/Average\s*=\s*([\d.]+)\s*ms/i);
+    if (windowsAverage?.[1]) return Number.parseFloat(windowsAverage[1]);
     // Fall back to the first per-packet "time=NN ms".
     const perPacket = stdout.match(/time[=<]([\d.]+)\s*ms/i);
     return perPacket?.[1] ? Number.parseFloat(perPacket[1]) : undefined;
@@ -133,29 +146,38 @@ export class NetDiagService {
     resolvedIp: string,
     ctx: Context,
   ): Promise<NetDiagResult> {
+    // Windows ships tracert, not traceroute, with its own flags: -d numeric,
+    // -h 30 max hops, -w per-probe wait in ms (unix -w is seconds). Unix:
+    // -n numeric, -w 1s per-probe wait, -q 1 one probe per hop, -m 30 max hops.
+    const [binary, args] =
+      process.platform === 'win32'
+        ? (['tracert', ['-d', '-h', '30', '-w', '1000', resolvedIp]] as const)
+        : (['traceroute', ['-n', '-w', '1', '-q', '1', '-m', '30', resolvedIp]] as const);
     try {
-      // -n numeric (no reverse DNS), -w 1s per-probe wait, -q 1 one probe per hop, -m 30 max hops.
-      const { stdout } = await execFileAsync(
-        'traceroute',
-        ['-n', '-w', '1', '-q', '1', '-m', '30', resolvedIp],
-        {
-          timeout: 60_000,
-          signal: ctx.signal,
-        },
-      );
+      const { stdout } = await execFileAsync(binary, [...args], {
+        timeout: 60_000,
+        signal: ctx.signal,
+      });
       const hops = this.parseTraceroute(stdout);
       ctx.log.info('Traceroute', { target, hopCount: hops.length });
       return { mode: 'traceroute', target, hops };
     } catch (err) {
       throw serviceUnavailable(
-        `traceroute failed for ${target} — the binary may be unavailable or blocked in this environment.`,
-        { reason: 'unreachable' },
+        `${binary} failed for ${target} — the binary may be unavailable or blocked in this environment.`,
+        { reason: 'unreachable', ...ctx.recoveryFor('unreachable') },
         { cause: err },
       );
     }
   }
 
-  /** Parse hop number, address, and first RTT from traceroute output. */
+  /**
+   * Parse hop number, address, and first RTT from traceroute or tracert output.
+   * The two formats order the columns differently (unix puts the address first,
+   * tracert puts it after the RTT columns), so the address is located by shape
+   * rather than by position. The IPv6 alternative requires at least two colons:
+   * a looser hex-run pattern reads prose — tracert's "Request timed out." — as
+   * an address.
+   */
   private parseTraceroute(stdout: string): Hop[] {
     const hops: Hop[] = [];
     for (const line of stdout.split('\n')) {
@@ -163,7 +185,9 @@ export class NetDiagService {
       if (!m?.[1]) continue;
       const hopNum = Number.parseInt(m[1], 10);
       const rest = m[2] ?? '';
-      const ipMatch = rest.match(/(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]{2,})/);
+      const ipMatch = rest.match(
+        /(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{0,4}){2,})/,
+      );
       const rttMatch = rest.match(/([\d.]+)\s*ms/);
       const hop: Hop = { hop: hopNum, address: ipMatch?.[1] ?? '*' };
       if (rttMatch?.[1]) hop.rttMs = Number.parseFloat(rttMatch[1]);
@@ -201,12 +225,31 @@ export class NetDiagService {
     });
   }
 
-  /** Detect the host's egress IP via an external echo endpoint. */
+  /**
+   * Detect the host's egress IP via an external echo endpoint. A provider
+   * failure is re-thrown sanitized: the framework fetch error carries the echo
+   * URL, HTTP status, and up to 500 bytes of the upstream response body in its
+   * `data`, none of which belongs on the wire. The original is preserved as
+   * `cause` for server-side logs and telemetry only.
+   */
   private async publicIp(ctx: Context): Promise<NetDiagResult> {
-    const response = await fetchWithTimeout('https://api.ipify.org?format=json', 8000, ctx, {
-      signal: ctx.signal,
-    });
-    const body = (await response.json()) as { ip?: string };
+    let body: { ip?: string };
+    try {
+      const response = await fetchWithTimeout('https://api.ipify.org?format=json', 8000, ctx, {
+        signal: ctx.signal,
+      });
+      body = (await response.json()) as { ip?: string };
+    } catch (err) {
+      // Caller cancellation isn't a provider failure — let it bubble unchanged.
+      if (ctx.signal.aborted) throw err;
+      ctx.log.error(
+        'Egress-IP echo request failed',
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      throw serviceUnavailable('Egress-IP echo is unavailable. Try again shortly.', undefined, {
+        cause: err,
+      });
+    }
     if (!body.ip) {
       throw serviceUnavailable('Egress-IP echo returned no address.');
     }
