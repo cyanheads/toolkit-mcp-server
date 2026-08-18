@@ -8,10 +8,11 @@
 minimumReleaseAge = 259200 # seconds (3 days)
 # Framework releases are first-party — adopt them same-day.
 minimumReleaseAgeExcludes = ["@cyanheads/mcp-ts-core"]
-# 'auto' = "fallback": Prioritize local node_modules. Bun will only install if a module is missing.
-auto = "fallback"
-# Set to 'true' in CI/prod to ensure exact dependency versions are installed.
-frozenLockfile = false
+
+[install.security]
+# Socket scans every package before install (malware, typosquats, CVEs).
+# Note: configuring a scanner disables Bun's auto-install.
+scanner = "@socketsecurity/bun-security-scanner"
 
 [run]
 # When true, scripts running 'node' (e.g., from a dependency) will transparently use 'bun' instead.

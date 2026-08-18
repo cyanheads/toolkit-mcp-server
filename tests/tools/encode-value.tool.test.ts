@@ -35,17 +35,15 @@ describe('toolkit_encode_value', () => {
     expect(result.result).toBe(expected);
   });
 
-  it.each([
-    'base64',
-    'base64url',
-    'hex',
-    'url',
-  ] as const)('round-trips through %s', async (encoding) => {
-    const original = 'The quick brown fox: 1+1=2 & more!';
-    const enc = await run({ operation: 'encode', encoding, value: original });
-    const dec = await run({ operation: 'decode', encoding, value: enc.result });
-    expect(dec.result).toBe(original);
-  });
+  it.each(['base64', 'base64url', 'hex', 'url'] as const)(
+    'round-trips through %s',
+    async (encoding) => {
+      const original = 'The quick brown fox: 1+1=2 & more!';
+      const enc = await run({ operation: 'encode', encoding, value: original });
+      const dec = await run({ operation: 'decode', encoding, value: enc.result });
+      expect(dec.result).toBe(original);
+    },
+  );
 
   it('base64url uses the URL-safe alphabet (- _ not + /)', async () => {
     // Bytes 0xFB 0xFF encode to "+/8=" in base64 and "-_8" in base64url.

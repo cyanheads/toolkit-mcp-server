@@ -15,7 +15,7 @@ import process from 'node:process';
 import { promisify } from 'node:util';
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, requestContextService } from '@cyanheads/mcp-ts-core/utils';
+import { fetchWithTimeout } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { isPrivateOrReservedIp } from './target.js';
 
@@ -203,11 +203,7 @@ export class NetDiagService {
 
   /** Detect the host's egress IP via an external echo endpoint. */
   private async publicIp(ctx: Context): Promise<NetDiagResult> {
-    const reqCtx = requestContextService.createRequestContext({
-      operation: 'NetDiagService.publicIp',
-      parentContext: { requestId: ctx.requestId, tenantId: ctx.tenantId, traceId: ctx.traceId },
-    });
-    const response = await fetchWithTimeout('https://api.ipify.org?format=json', 8000, reqCtx, {
+    const response = await fetchWithTimeout('https://api.ipify.org?format=json', 8000, ctx, {
       signal: ctx.signal,
     });
     const body = (await response.json()) as { ip?: string };

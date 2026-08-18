@@ -9,7 +9,7 @@ import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import { generateQrTool } from '@/mcp-server/tools/definitions/generate-qr.tool.js';
 
-const run = (args: unknown) =>
+const run = async (args: unknown) =>
   generateQrTool.handler(
     generateQrTool.input.parse(args),
     createMockContext({ errors: generateQrTool.errors }),

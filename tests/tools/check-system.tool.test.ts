@@ -75,16 +75,13 @@ describe('toolkit_check_system', () => {
     expect(result).toEqual(expect.schemaMatching(checkSystemTool.output));
   });
 
-  it.each([
-    'os',
-    'cpu',
-    'memory',
-    'load',
-    'interfaces',
-  ])('output conforms to the declared schema for the %s facet', async (what) => {
-    const result = await run(what);
-    expect(result).toEqual(expect.schemaMatching(checkSystemTool.output));
-  });
+  it.each(['os', 'cpu', 'memory', 'load', 'interfaces'])(
+    'output conforms to the declared schema for the %s facet',
+    async (what) => {
+      const result = await run(what);
+      expect(result).toEqual(expect.schemaMatching(checkSystemTool.output));
+    },
+  );
 
   it('format renders the cpu facet fields', () => {
     const blocks = checkSystemTool.format!({
