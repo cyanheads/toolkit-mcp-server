@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.2.2](changelog/2.2.x/2.2.2.md) — 2026-08-22
+
+Dockerfile build stage now runs on $BUILDPLATFORM instead of emulating, fixing the multi-arch GHCR publish that aborted under QEMU — no image reached GHCR for 2.2.1.
+
 ## [2.2.1](changelog/2.2.x/2.2.1.md) — 2026-08-22 · ⚠️ Breaking · 🛡️ Security
 
 Framework bumped to mcp-ts-core 0.12.3 (strict-root tool inputs, error-envelope outputSchema, 2020-12 JSON Schema), Bun pinned to 1.4.0, and geo/net-diag upstream-failure logging hardened to stay off the client-visible notification sink.
