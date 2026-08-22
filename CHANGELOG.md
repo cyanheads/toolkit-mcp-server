@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.2.1](changelog/2.2.x/2.2.1.md) — 2026-08-22 · ⚠️ Breaking · 🛡️ Security
+
+Framework bumped to mcp-ts-core 0.12.3 (strict-root tool inputs, error-envelope outputSchema, 2020-12 JSON Schema), Bun pinned to 1.4.0, and geo/net-diag upstream-failure logging hardened to stay off the client-visible notification sink.
+
 ## [2.2.0](changelog/2.2.x/2.2.0.md) — 2026-08-18 · 🛡️ Security
 
 Windows ping/traceroute fixed, unreachable errors gain their recovery hint, egress-IP failures sanitized, generate_id's read-only annotation corrected, generate_qr adds an image content block and a 2048px raster budget, and encode_value's decoded output can no longer break its Markdown fence.
