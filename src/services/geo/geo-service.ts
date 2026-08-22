@@ -16,7 +16,7 @@ import {
   fetchWithTimeout,
   logger,
   RateLimiter,
-  requestContextService,
+  withExtra,
   withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
@@ -163,26 +163,21 @@ export class GeoService {
     url.searchParams.set('fields', IP_API_FIELDS);
     if (cfg.geoApiKey) url.searchParams.set('key', cfg.geoApiKey);
 
-    // Build a correlated open-bag RequestContext for the network/log utilities
-    // (they take RequestContext, which the handler-facing Context isn't assignable
-    // to). Forward the correlation fields as a plain bag.
-    const reqCtx = requestContextService.createRequestContext({
-      operation: 'GeoService.lookup',
-      parentContext: { requestId: ctx.requestId, tenantId: ctx.tenantId, traceId: ctx.traceId },
-    });
-
     let raw: IpApiResponse;
     try {
+      // `Context extends RequestContext`, so the handler ctx goes straight into
+      // the network and log utilities. They project it to the canonical request
+      // fields before serializing, so no live handles ride along.
       raw = await withRetry(
         async () => {
-          const response = await fetchWithTimeout(url.toString(), 8000, reqCtx, {
+          const response = await fetchWithTimeout(url.toString(), 8000, ctx, {
             signal: ctx.signal,
           });
           return (await response.json()) as IpApiResponse;
         },
         {
           operation: 'GeoService.lookup',
-          context: reqCtx,
+          context: ctx,
           baseDelayMs: 1500,
           signal: ctx.signal,
         },
@@ -190,14 +185,18 @@ export class GeoService {
     } catch (err) {
       // Caller cancellation isn't a provider failure — let it bubble unchanged.
       if (ctx.signal.aborted) throw err;
-      // The framework fetch error carries the provider URL, requestId, HTTP
-      // status, and up to 500 bytes of the upstream response body in its `data`.
-      // Re-throw a clean ServiceUnavailable so none of that reaches the client;
-      // the original is preserved as `cause` for server-side logs/telemetry only.
-      ctx.log.error(
+      // The framework fetch error names the provider URL — query string and
+      // TOOLKIT_GEO_API_KEY included — the HTTP status, and up to 500 bytes of
+      // the upstream response body. Re-throw a clean ServiceUnavailable so none
+      // of it reaches the client, keeping the original as `cause` for
+      // server-side logs and telemetry only. The raw error goes to the process
+      // logger and NOT `ctx.log`, which is dual-sink: it mirrors every call to
+      // the client as `notifications/message`, which would put `error.message`
+      // straight back onto the wire this re-throw exists to keep clean.
+      logger.error(
         'Geo provider request failed',
         err instanceof Error ? err : new Error(String(err)),
-        { resolvedIp },
+        withExtra(ctx, { resolvedIp }),
       );
       throw serviceUnavailable(
         `Geolocation provider "${GEO_PROVIDER}" is unavailable. Try again shortly.`,

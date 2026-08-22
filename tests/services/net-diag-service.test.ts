@@ -321,6 +321,36 @@ describe('NetDiagService probes', () => {
       expect(error.message).not.toMatch(/ECONNREFUSED|1\.2\.3\.4/);
     });
 
+    it('keeps upstream echo detail out of the client-visible log sink', async () => {
+      // `ctx.log` is dual-sink: every call also emits `notifications/message` to
+      // the client, and an error call puts `error.message` on that payload. The
+      // framework fetch error names the echo URL and HTTP status — the same
+      // provenance the sanitizing re-throw above strips — so handing the raw
+      // error to `ctx.log` would route it around the sanitizer.
+      const failures: Array<[string, unknown]> = [
+        ['non-OK', vi.fn().mockResolvedValue(jsonResponse({ secret: 'leaky-body' }, 503))],
+        ['transport', vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 1.2.3.4'))],
+      ];
+      for (const [, fetchImpl] of failures) {
+        vi.stubGlobal('fetch', fetchImpl);
+        const ctx = createMockContext({ errors: checkNetworkTool.errors });
+        const errorSpy = vi.spyOn(ctx.log, 'error');
+        await getNetDiagService()
+          .run({ mode: 'public_ip', count: 3, timeoutMs: 3000 }, ctx)
+          .catch(() => undefined);
+
+        for (const [msg, err, data] of errorSpy.mock.calls) {
+          // Mirrors how the framework composes the notification payload.
+          const wire = JSON.stringify({
+            message: msg,
+            ...((data as Record<string, unknown>) ?? {}),
+            ...(err ? { error: (err as Error).message } : {}),
+          });
+          expect(wire).not.toMatch(/ipify|Status:|503|leaky-body|ECONNREFUSED|1\.2\.3\.4/i);
+        }
+      }
+    });
+
     it('sanitizes a non-JSON echo body', async () => {
       vi.stubGlobal(
         'fetch',

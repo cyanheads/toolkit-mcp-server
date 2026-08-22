@@ -15,7 +15,7 @@ import process from 'node:process';
 import { promisify } from 'node:util';
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout } from '@cyanheads/mcp-ts-core/utils';
+import { fetchWithTimeout, logger } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { isPrivateOrReservedIp } from './target.js';
 
@@ -230,7 +230,10 @@ export class NetDiagService {
    * failure is re-thrown sanitized: the framework fetch error carries the echo
    * URL, HTTP status, and up to 500 bytes of the upstream response body in its
    * `data`, none of which belongs on the wire. The original is preserved as
-   * `cause` for server-side logs and telemetry only.
+   * `cause` for server-side logs and telemetry only, and goes to the process
+   * logger rather than `ctx.log` — the latter is dual-sink and mirrors every
+   * call to the client as `notifications/message`, which would put the echo URL
+   * and status back on the wire the sanitizing re-throw exists to keep clean.
    */
   private async publicIp(ctx: Context): Promise<NetDiagResult> {
     let body: { ip?: string };
@@ -242,9 +245,10 @@ export class NetDiagService {
     } catch (err) {
       // Caller cancellation isn't a provider failure — let it bubble unchanged.
       if (ctx.signal.aborted) throw err;
-      ctx.log.error(
+      logger.error(
         'Egress-IP echo request failed',
         err instanceof Error ? err : new Error(String(err)),
+        ctx,
       );
       throw serviceUnavailable('Egress-IP echo is unavailable. Try again shortly.', undefined, {
         cause: err,

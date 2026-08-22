@@ -276,6 +276,40 @@ describe('GeoService', () => {
     }
   });
 
+  it('keeps upstream provider detail out of the client-visible log sink', async () => {
+    // `ctx.log` is dual-sink: every call also emits `notifications/message` to
+    // the client, and an error call puts `error.message` on that wire payload.
+    // The framework's fetch error reads "<provider-host> returned HTTP 503 ..." —
+    // the same provenance the thrown ServiceUnavailable deliberately strips, so
+    // handing the raw error to `ctx.log` would route it around the sanitizer.
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(jsonResponse({ secret: 'upstream-body-should-not-leak' }, 503)),
+      );
+      const ctx = createMockContext();
+      const errorSpy = vi.spyOn(ctx.log, 'error');
+      const settled = getGeoService()
+        .lookup('8.8.8.8', ctx)
+        .catch((e: unknown) => e);
+      await vi.runAllTimersAsync();
+      await settled;
+
+      for (const [msg, err, data] of errorSpy.mock.calls) {
+        // Mirrors how the framework composes the notification payload.
+        const wire = JSON.stringify({
+          message: msg,
+          ...((data as Record<string, unknown>) ?? {}),
+          ...(err ? { error: (err as Error).message } : {}),
+        });
+        expect(wire).not.toMatch(/ip-api|returned HTTP|503|upstream-body-should-not-leak/i);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('honors a provider base URL + API key from config', async () => {
     vi.stubEnv('TOOLKIT_GEO_BASE_URL', 'https://pro.ip-api.example');
     vi.stubEnv('TOOLKIT_GEO_API_KEY', 'secret-key');
