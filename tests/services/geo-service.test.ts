@@ -276,6 +276,35 @@ describe('GeoService', () => {
     }
   });
 
+  it('retries an upstream 500 and returns the subsequent success', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ message: 'temporary failure' }, { status: 500 }))
+        .mockResolvedValueOnce(Response.json(FULL_PAYLOAD));
+      vi.stubGlobal('fetch', fetchMock);
+      const pending = lookup('8.8.8.8');
+      await vi.runAllTimersAsync();
+      await expect(pending).resolves.toMatchObject({ resolvedIp: '8.8.8.8', countryCode: 'US' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry an upstream 501 and sanitizes the failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ secret: 'upstream detail' }, { status: 501 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(lookup('8.8.8.8')).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'Geolocation provider "ip-api" is unavailable. Try again shortly.',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps upstream provider detail out of the client-visible log sink', async () => {
     // `ctx.log` is dual-sink: every call also emits `notifications/message` to
     // the client, and an error call puts `error.message` on that wire payload.
