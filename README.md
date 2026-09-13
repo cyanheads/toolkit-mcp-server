@@ -27,9 +27,11 @@
 
 ---
 
-## Tools
+## Overview
 
-Seven tools. Five are always on and need no configuration — pure-compute utilities plus an SSRF-free IP lookup. Two probe the server host and stay absent from `tools/list` until you opt in, fail-closed.
+A standalone developer-utilities server — the five always-on tools need no upstream API: generate identifiers, QR codes, and cryptographic digests, encode and decode values, and geolocate a public IP or hostname. Two more tools report diagnostics about the server's own host, gated off by default. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+
+### Tools
 
 | Tool | Description |
 |:---|:---|
@@ -41,9 +43,9 @@ Seven tools. Five are always on and need no configuration — pure-compute utili
 | `toolkit_check_network` | **Gated, off by default.** Read-only network diagnostics from the server host — ping, traceroute, TCP connectivity, or egress-IP detection. |
 | `toolkit_check_system` | **Gated, off by default.** Report a facet of the server host's system state — OS, CPU, memory, load average, or network interfaces. |
 
-### `toolkit_hash_value`
+## Capability reference
 
-Generate a digest, or constant-time-verify a value against an expected one.
+### `toolkit_hash_value` <sub>tool</sub>
 
 - `operation`: `generate` (lowercase-hex digest) or `compare` (timing-safe check via `timingSafeEqual`)
 - Algorithms: `sha256` (default) and `sha512` for security; `sha1` and `md5` are exposed for checksum and file-integrity compatibility only — never for passwords or signatures
@@ -52,9 +54,7 @@ Generate a digest, or constant-time-verify a value against an expected one.
 
 ---
 
-### `toolkit_generate_id`
-
-Mint cryptographically-random identifiers from the platform CSPRNG — the correct source for IDs that must be unpredictable, unlike model-invented values.
+### `toolkit_generate_id` <sub>tool</sub>
 
 - `type`: `uuid_v4` (random, default), `uuid_v7` (time-ordered, sortable by creation), or `ulid` (26-char Crockford base32, lexicographically sortable)
 - `count` mints a batch up to 1000 in one call; the returned `ids` array always holds exactly `count` values
@@ -63,9 +63,7 @@ Mint cryptographically-random identifiers from the platform CSPRNG — the corre
 
 ---
 
-### `toolkit_generate_qr`
-
-Encode text or a URL into a QR code.
+### `toolkit_generate_qr` <sub>tool</sub>
 
 - `format`: `svg` (inline markup), `png_base64` (raster bytes with `mimeType` and `byteLength`), or `terminal` (Unicode block string)
 - `errorCorrection` (L/M/Q/H) trades data capacity for damage tolerance; `margin` sets the quiet-zone width; `scale` sets pixels per module for raster output
@@ -76,9 +74,7 @@ Encode text or a URL into a QR code.
 
 ---
 
-### `toolkit_encode_value`
-
-Encode or decode a value, in either direction.
+### `toolkit_encode_value` <sub>tool</sub>
 
 - `encoding`: `base64`, `base64url` (URL-safe alphabet), `hex`, or `url` (percent-encoding)
 - `operation`: `encode` (raw UTF-8 → encoding) or `decode` (encoded value → text)
@@ -86,9 +82,7 @@ Encode or decode a value, in either direction.
 
 ---
 
-### `toolkit_geolocate_ip`
-
-Resolve a public IP or hostname to geographic and network metadata.
+### `toolkit_geolocate_ip` <sub>tool</sub>
 
 - Returns country, region, city, latitude/longitude, ASN, owning organization, and timezone
 - `proxy`, `hosting`, and `mobile` flag when the address is a proxy/VPN/Tor exit, a datacenter network, or a mobile carrier — a `true` on any of them means the coordinates describe infrastructure, not a person. Absent when the provider doesn't report them
@@ -100,47 +94,40 @@ Resolve a public IP or hostname to geographic and network metadata.
 
 ---
 
-### `toolkit_check_network`
+### `toolkit_check_network` <sub>tool</sub>
 
-**Gated** — registered only when `TOOLKIT_ENABLE_NET_DIAGNOSTICS=true`. Read-only network diagnostics from the server host.
-
+- **Gated** — registered only when `TOOLKIT_ENABLE_NET_DIAGNOSTICS=true`; absent from `tools/list` otherwise
 - `mode`: `ping` (ICMP round-trip), `traceroute` (hop path to the target), `connectivity` (raw TCP connect to `target` on `port`), or `public_ip` (the host's own egress IP)
 - A host that does not respond is reported as `reachable: false` — a valid result, not an error
 - Diagnoses the **server's** own network, so it is useful on a local or self-hosted deployment; reaching a private/reserved/internal target additionally requires `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`, which keeps the cloud-metadata endpoint blocked by default
 
 ---
 
-### `toolkit_check_system`
+### `toolkit_check_system` <sub>tool</sub>
 
-**Gated** — registered only when `TOOLKIT_ENABLE_SYSTEM_INFO=true`. Report a facet of the server host's system state, read-only.
-
+- **Gated** — registered only when `TOOLKIT_ENABLE_SYSTEM_INFO=true`; absent from `tools/list` otherwise
 - `what`: `os`, `cpu`, `memory`, `load`, or `interfaces`
 - Exactly one facet object is populated per call, matching `what`
 - Describes the host this server runs on, **not** the calling client — meaningful on a local or self-hosted deployment; gated off by default because `os` and `interfaces` disclose host topology and version details
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
-
-- Declarative tool definitions — single file per tool, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Typed error contracts — each fallible tool declares its failure reasons with recovery hints the agent can act on
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
 Toolkit-specific:
 
-- Fail-closed gating — the two host-probing tools are absent from `tools/list` unless explicitly enabled, so a hosted instance exposes no SSRF or info-disclosure surface
+- Local, pure-compute core — hashing, ID minting, QR encoding, and value encode/decode run entirely in-process via `node:crypto` and the `qrcode` library; no upstream calls
+- `toolkit_geolocate_ip` is the one keyless-by-default network call (ip-api free tier, optional `TOOLKIT_GEO_API_KEY`); the server calls the provider directly and re-checks the DNS-resolved IP against private ranges, so a hostname can't smuggle a request to an internal address
+- Fail-closed gating — the two host-probing tools (`toolkit_check_network`, `toolkit_check_system`) are absent from `tools/list` unless explicitly enabled, so a hosted instance exposes no SSRF or info-disclosure surface by default
 - Two-tier network gate — even with diagnostics enabled, private/reserved/loopback/link-local targets (including the cloud-metadata endpoint) stay blocked until a second flag permits them
-- CSPRNG-backed primitives — identifiers and digests come from the platform crypto source, and hash comparison is constant-time via `timingSafeEqual`
-- SSRF-free geolocation — the server calls the provider, then re-checks the DNS-resolved IP against private ranges before the lookup, so a hostname cannot smuggle a request to an internal address
+- Bounded inputs — QR `data` capped at 2953 bytes, rendered PNGs capped at 2048 px per side, ID batches capped at 1000; CSPRNG-backed primitives with constant-time hash comparison via `timingSafeEqual`
 
 Agent-friendly output:
 
-- Provenance — geolocation echoes the resolved IP and names the answering provider; absent upstream fields are reported as unknown, never invented
-- Down-but-valid results — an unreachable host returns `reachable: false` instead of an error, so callers branch on data, not exception text
-- Typed failure reasons — decode failures, missing digests, and blocked private targets each carry a structured reason plus a next-step recovery hint
+- Provenance — geolocation echoes `resolvedIp` (the IP actually located) and `source` (the answering provider); absent upstream fields are reported as unknown, never invented
+- Response shaping — provider-supplied strings (`org`, `isp`, `as`) are length-bounded and stripped of control characters before they reach the response, so untrusted registry text can't flood or format a model's context
+- Discriminated output contracts — `operation`, `format`, `mode`, and `what` fields echo back exactly what ran, with only the branch-relevant fields populated per call; an unreachable host in `toolkit_check_network` reports `reachable: false` as valid data, not an error
+- Typed failure reasons — decode, geolocation, and network failures each carry a structured `reason` plus a next-step recovery hint (e.g. `decode_failed`, `raster_too_large`, `private_target_blocked`)
 
 ## Getting started
 
