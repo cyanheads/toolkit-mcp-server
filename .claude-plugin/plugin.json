@@ -1,20 +1,104 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "toolkit-mcp-server",
   "version": "2.2.2",
-  "description": "Fast developer utilities — random ID generation, QR codes, IP geolocation, hashing, and encoding — plus gated, fail-closed network and system diagnostics.",
+  "description": "Generate random IDs, QR codes, and hashes, encode and decode values, and geolocate IPs, plus gated network and system diagnostics, via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "cyanheads"
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
   },
   "homepage": "https://github.com/cyanheads/toolkit-mcp-server#readme",
   "repository": "https://github.com/cyanheads/toolkit-mcp-server",
   "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "developer-tools",
+    "utilities",
+    "uuid",
+    "ulid",
+    "qr-code",
+    "hashing",
+    "encoding",
+    "base64",
+    "ip-geolocation",
+    "network-diagnostics"
+  ],
   "mcpServers": {
     "toolkit-mcp-server": {
       "command": "npx",
-      "args": ["-y", "@cyanheads/toolkit-mcp-server"],
+      "args": [
+        "-y",
+        "@cyanheads/toolkit-mcp-server"
+      ],
       "env": {
-        "MCP_TRANSPORT_TYPE": "stdio"
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "TOOLKIT_ENABLE_NET_DIAGNOSTICS": "${user_config.TOOLKIT_ENABLE_NET_DIAGNOSTICS}",
+        "TOOLKIT_ENABLE_SYSTEM_INFO": "${user_config.TOOLKIT_ENABLE_SYSTEM_INFO}",
+        "TOOLKIT_ALLOW_PRIVATE_NETWORK": "${user_config.TOOLKIT_ALLOW_PRIVATE_NETWORK}",
+        "TOOLKIT_GEO_API_KEY": "${user_config.TOOLKIT_GEO_API_KEY}",
+        "TOOLKIT_GEO_BASE_URL": "${user_config.TOOLKIT_GEO_BASE_URL}",
+        "TOOLKIT_GEO_CACHE_TTL_SECONDS": "${user_config.TOOLKIT_GEO_CACHE_TTL_SECONDS}",
+        "TOOLKIT_GEO_RATE_LIMIT_PER_MIN": "${user_config.TOOLKIT_GEO_RATE_LIMIT_PER_MIN}"
       }
+    }
+  },
+  "userConfig": {
+    "TOOLKIT_ENABLE_NET_DIAGNOSTICS": {
+      "title": "Enable network diagnostics",
+      "description": "Register the gated toolkit_check_network tool (ping/traceroute/connectivity/public_ip). Off by default — leave off for hosted/shared deployments.",
+      "type": "string",
+      "required": false,
+      "default": "false"
+    },
+    "TOOLKIT_ENABLE_SYSTEM_INFO": {
+      "title": "Enable system info",
+      "description": "Register the gated toolkit_check_system tool (host OS/CPU/memory/load/interfaces). Off by default — only meaningful on a local deployment.",
+      "type": "string",
+      "required": false,
+      "default": "false"
+    },
+    "TOOLKIT_ALLOW_PRIVATE_NETWORK": {
+      "title": "Allow private network targets",
+      "description": "With network diagnostics enabled, permit private/reserved/loopback targets. The second explicit gate; off by default blocks the cloud-metadata endpoint and internal recon.",
+      "type": "string",
+      "required": false,
+      "default": "false"
+    },
+    "TOOLKIT_GEO_API_KEY": {
+      "title": "Geolocation API key",
+      "description": "API key for the geolocation endpoint, if it requires one. The default ip-api tier is keyless.",
+      "type": "string",
+      "required": false,
+      "sensitive": true,
+      "default": ""
+    },
+    "TOOLKIT_GEO_BASE_URL": {
+      "title": "Geolocation base URL",
+      "description": "Base URL for an ip-api-compatible geolocation endpoint. Default is the keyless ip-api endpoint, which is plaintext HTTP.",
+      "type": "string",
+      "required": false,
+      "default": "http://ip-api.com"
+    },
+    "TOOLKIT_GEO_CACHE_TTL_SECONDS": {
+      "title": "Geolocation cache TTL (seconds)",
+      "description": "How long to cache geolocation results in memory. Geolocation is stable, so repeats are cached.",
+      "type": "string",
+      "required": false,
+      "default": "3600"
+    },
+    "TOOLKIT_GEO_RATE_LIMIT_PER_MIN": {
+      "title": "Geolocation rate limit (per minute)",
+      "description": "Max geolocation requests per minute; excess requests are rejected with a retryable rate-limit error. Default 45 matches the ip-api free tier.",
+      "type": "string",
+      "required": false,
+      "default": "45"
     }
   }
 }

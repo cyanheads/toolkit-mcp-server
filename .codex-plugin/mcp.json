@@ -1,9 +1,21 @@
 {
   "toolkit-mcp-server": {
     "command": "npx",
-    "args": ["-y", "@cyanheads/toolkit-mcp-server"],
+    "args": [
+      "-y",
+      "@cyanheads/toolkit-mcp-server"
+    ],
     "env": {
       "MCP_TRANSPORT_TYPE": "stdio"
-    }
+    },
+    "env_vars": [
+      "TOOLKIT_ENABLE_NET_DIAGNOSTICS",
+      "TOOLKIT_ENABLE_SYSTEM_INFO",
+      "TOOLKIT_ALLOW_PRIVATE_NETWORK",
+      "TOOLKIT_GEO_API_KEY",
+      "TOOLKIT_GEO_BASE_URL",
+      "TOOLKIT_GEO_CACHE_TTL_SECONDS",
+      "TOOLKIT_GEO_RATE_LIMIT_PER_MIN"
+    ]
   }
 }
