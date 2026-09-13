@@ -7,6 +7,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { markdown } from '@cyanheads/mcp-ts-core/utils';
 
 type Encoding = 'base64' | 'base64url' | 'hex' | 'url';
 
@@ -32,19 +33,6 @@ function decode(value: string, encoding: Encoding): string {
   const reencoded = buf.toString(encoding).replace(/=+$/, '');
   if (reencoded !== value.replace(/=+$/, '')) throw new RangeError(`not valid ${encoding}`);
   return buf.toString('utf8');
-}
-
-/**
- * Wrap transformed text in a code fence the text itself cannot close. A fenced
- * block ends at the first backtick-only line at least as long as its opener, so
- * decoded content carrying its own fence would otherwise break out and have the
- * remainder read as Markdown. Sizing the delimiter one backtick past the
- * longest run in the payload keeps the value literal without altering it.
- */
-function fence(value: string): string {
-  const longestRun = Math.max(0, ...[...value.matchAll(/`+/g)].map((m) => m[0].length));
-  const delimiter = '`'.repeat(Math.max(3, longestRun + 1));
-  return `${delimiter}\n${value}\n${delimiter}`;
 }
 
 export const encodeValueTool = tool('toolkit_encode_value', {
@@ -76,7 +64,7 @@ export const encodeValueTool = tool('toolkit_encode_value', {
   errors: [
     {
       reason: 'decode_failed',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'operation is "decode" but value is malformed for the chosen encoding.',
       recovery:
         "Value isn't valid for the chosen encoding. Verify the encoding matches the input, or switch operation to 'encode'.",
@@ -106,7 +94,7 @@ export const encodeValueTool = tool('toolkit_encode_value', {
   format: (result) => [
     {
       type: 'text',
-      text: `**${result.operation === 'encode' ? 'Encoded' : 'Decoded'}** (operation: ${result.operation}, encoding: ${result.encoding}):\n${fence(result.result)}`,
+      text: `**${result.operation === 'encode' ? 'Encoded' : 'Decoded'}** (operation: ${result.operation}, encoding: ${result.encoding}):\n${markdown().codeBlock(result.result).build()}`,
     },
   ],
 });

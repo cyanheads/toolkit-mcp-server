@@ -94,20 +94,20 @@ export const hashValueTool = tool('toolkit_hash_value', {
   errors: [
     {
       reason: 'missing_expected',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'operation is "compare" but no expected digest was supplied.',
       recovery: 'Provide expected (the digest to compare against) when operation is "compare".',
     },
     {
       reason: 'expected_length_mismatch',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'The expected digest length does not match the algorithm, so compare would always fail.',
       recovery:
         "The expected digest length doesn't match the algorithm. Check the algorithm or the expected value.",
     },
     {
       reason: 'invalid_input_encoding',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'value is not valid for the declared inputEncoding (e.g. non-hex characters with inputEncoding "hex").',
       recovery:
         'Input is not valid for the declared inputEncoding. Verify the encoding matches the byte representation.',

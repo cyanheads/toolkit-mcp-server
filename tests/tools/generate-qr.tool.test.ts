@@ -105,13 +105,13 @@ describe('toolkit_generate_qr', () => {
 
   it('rejects over-capacity data with a typed data_too_large error, not an internal failure', async () => {
     // 2953 bytes passes the schema and fits level L, but exceeds the ~2331-byte
-    // capacity at level M — caught and surfaced as a declared InvalidParams error
+    // capacity at level M — caught and surfaced as a declared ValidationError
     // instead of the raw qrcode "too big" internal error.
     const error = await run({ data: 'x'.repeat(2953), errorCorrection: 'M' }).catch(
       (e: unknown) => e,
     );
     expect(error).toMatchObject({
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'data_too_large' },
     });
     expect((error as Error).message).not.toMatch(/too big/i);
@@ -159,7 +159,7 @@ describe('toolkit_generate_qr', () => {
       scale: 32,
     }).catch((e: unknown) => e);
     expect(error).toMatchObject({
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'raster_too_large' },
     });
     // The hint names a scale that fits, so the caller's next attempt succeeds.

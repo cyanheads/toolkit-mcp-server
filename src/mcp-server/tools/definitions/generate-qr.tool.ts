@@ -89,13 +89,13 @@ export const generateQrTool = tool('toolkit_generate_qr', {
   errors: [
     {
       reason: 'data_too_large',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'data exceeds the QR capacity for the chosen errorCorrection level and encoding mode.',
       recovery: 'Shorten data, or lower errorCorrection (H→Q→M→L) to raise capacity, then retry.',
     },
     {
       reason: 'raster_too_large',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'format is png_base64 and (modules + 2 × margin) × scale exceeds the pixel budget.',
       recovery: `Lower scale (and margin if needed) so the rendered image stays within ${QR_MAX_PNG_EDGE_PX} px per side, or request format svg, which has no raster budget.`,
     },

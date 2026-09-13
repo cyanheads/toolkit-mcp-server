@@ -9,7 +9,9 @@
  * @module tests/tools/wire-contract.test
  */
 
-import type { AnyToolDefinition } from '@cyanheads/mcp-ts-core';
+import { type AnyToolDefinition, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import { checkNetworkTool } from '@/mcp-server/tools/definitions/check-network.tool.js';
 import { checkSystemTool } from '@/mcp-server/tools/definitions/check-system.tool.js';
@@ -42,6 +44,49 @@ const VALID_INPUT: Record<string, Record<string, unknown>> = {
 };
 
 describe('tool wire contract', () => {
+  it.each([
+    [encodeValueTool, { operation: 'decode', encoding: 'hex', value: 'xz' }, 'decode_failed'],
+    [hashValueTool, { operation: 'compare', value: 'abc' }, 'missing_expected'],
+    [
+      hashValueTool,
+      { operation: 'compare', value: 'abc', expected: 'bad' },
+      'expected_length_mismatch',
+    ],
+    [hashValueTool, { value: 'xz', inputEncoding: 'hex' }, 'invalid_input_encoding'],
+    [generateQrTool, { data: 'x'.repeat(2953), errorCorrection: 'M' }, 'data_too_large'],
+    [
+      generateQrTool,
+      { data: 'x'.repeat(2953), errorCorrection: 'L', format: 'png_base64', scale: 32 },
+      'raster_too_large',
+    ],
+  ] as const)(
+    'classifies %s domain rejection %s with recovery on both surfaces',
+    async (definition, input, reason) => {
+      const result = await runToolContract(definition, input);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason, recovery: { hint: expect.any(String) } },
+        },
+      });
+      const { error } = z
+        .object({
+          error: z.object({
+            message: z.string(),
+            data: z.object({ recovery: z.object({ hint: z.string() }) }),
+          }),
+        })
+        .parse(result.structuredContent);
+      const text = result.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n');
+      expect(text).toContain(error.message);
+      expect(text).toContain(error.data.recovery.hint);
+    },
+  );
+
   it.each(ALL_TOOLS.map((t) => [t.name, t] as const))(
     '%s accepts its own minimal valid input',
     (name, definition) => {
