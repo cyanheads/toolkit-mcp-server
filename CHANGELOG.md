@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.2.3](changelog/2.2.x/2.2.3.md) — 2026-09-13
+
+Declared domain rejections on toolkit_encode_value, toolkit_generate_qr, and toolkit_hash_value now return ValidationError instead of InvalidParams, which mcp-ts-core 0.12.7 reserved for argument rejections; the framework moves to ^0.13.0 and its skill tree to framework-skills/.
+
 ## [2.2.2](changelog/2.2.x/2.2.2.md) — 2026-08-22
 
 Dockerfile build stage now runs on $BUILDPLATFORM instead of emulating, fixing the multi-arch GHCR publish that aborted under QEMU — no image reached GHCR for 2.2.1.
