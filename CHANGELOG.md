@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.2.4](changelog/2.2.x/2.2.4.md) — 2026-09-19
+
+Session mode is now declared in source (createApp({ sessionMode: 'stateless' })), five tools accept common parameter-name aliases, and devcheck gains a README version-badge check and a CodeQL workflow.
+
 ## [2.2.3](changelog/2.2.x/2.2.3.md) — 2026-09-13
 
 Declared domain rejections on toolkit_encode_value, toolkit_generate_qr, and toolkit_hash_value now return ValidationError instead of InvalidParams, which mcp-ts-core 0.12.7 reserved for argument rejections; the framework moves to ^0.13.0 and its skill tree to framework-skills/.

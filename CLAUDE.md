@@ -1,7 +1,7 @@
 # Developer Protocol
 
 **Server:** toolkit-mcp-server
-**Version:** 2.2.3
+**Version:** 2.2.4
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.6`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.0.0 (via the framework — not a direct dependency)

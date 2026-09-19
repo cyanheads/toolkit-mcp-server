@@ -1,6 +1,6 @@
 {
   "name": "toolkit-mcp-server",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "Generate random IDs, QR codes, and hashes, encode and decode values, and geolocate IPs, plus gated network and system diagnostics, via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "Casey Hand",
