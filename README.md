@@ -255,7 +255,7 @@ Every variable is optional. Server-specific options are validated at startup via
 | `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation requests per minute. | `45` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
-| `MCP_SESSION_MODE` | `auto`, `stateful`, or `stateless`. No tool requests multi-round input. | `stateless` in `.env.example` and Docker; unset uses `auto` → `stateful` |
+| `MCP_SESSION_MODE` | `auto`, `stateful`, or `stateless`. No tool requests multi-round input. `auto` is the framework schema default and resolves to `stateful`, but with `MCP_SESSION_MODE` unset the server resolves `stateless` from `createApp({ sessionMode })`; an explicit `MCP_SESSION_MODE` value still overrides it. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry) (spans, metrics, completion logs). | `false` |

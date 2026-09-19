@@ -41,6 +41,15 @@ if (serverConfig.enableSystemInfo) tools.push(checkSystemTool);
 await createApp({
   name: 'toolkit-mcp-server',
   title: 'toolkit-mcp-server',
+  /**
+   * The HTTP session posture, declared in source rather than inferred from the
+   * environment (#27). Every tool is request/response — no resource, prompt,
+   * subscription, or `ctx.requestInput` gate holds per-session state, and the geo
+   * cache and rate limiter are process-level — so the session store and the
+   * per-session McpServer allocation buy nothing, and the process scales
+   * horizontally without them. An explicit MCP_SESSION_MODE still overrides this.
+   */
+  sessionMode: 'stateless',
   tools,
   setup() {
     initGeoService();
