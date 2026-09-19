@@ -69,6 +69,12 @@ export const hashValueTool = tool('toolkit_hash_value', {
         "How value (and expected's pre-image, when relevant) is decoded before hashing: utf8 text, hex, or base64.",
       ),
   }),
+  /**
+   * The payload key is `value` here and `data` on toolkit_generate_qr; these
+   * three name the thing being hashed, never the `expected` digest it is
+   * compared against.
+   */
+  inputAliases: { input: 'value', text: 'value', data: 'value' },
   // Flat object; generate populates digest+lengthInBytes, compare populates matches.
   output: z.object({
     algorithm: z.enum(['sha256', 'sha512', 'sha1', 'md5']).describe('The algorithm used.'),

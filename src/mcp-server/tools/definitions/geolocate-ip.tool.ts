@@ -18,6 +18,13 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
   input: z.object({
     target: NetworkTargetSchema,
   }),
+  /**
+   * `target` takes an IP or a hostname, so a caller naturally reaches for the
+   * narrower word for whichever one it holds. Each maps one-to-one onto the
+   * single declared key; `inputSchema` is unchanged, so `target` is still what
+   * the model is told to send.
+   */
+  inputAliases: { ip: 'target', hostname: 'target', host: 'target' },
   output: z.object({
     target: z.string().describe('The target as supplied (IP or hostname).'),
     resolvedIp: z
@@ -89,12 +96,17 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'A hostname target failed DNS resolution.',
       recovery: "Hostname didn't resolve. Verify it, or pass an IP address directly.",
+      // GeoService.resolveTarget raises it; the handler never names the reason.
+      thrownBy: 'service',
     },
     {
       reason: 'private_target',
       code: JsonRpcErrorCode.ValidationError,
       when: 'The target resolves to a private/reserved IP with no public geolocation.',
       recovery: 'Private/reserved addresses have no public geolocation. Pass a public IP address.',
+      // GeoService.lookup raises it — both at the private-range guard and on a
+      // provider "fail" status for an unlocatable address.
+      thrownBy: 'service',
     },
   ],
 

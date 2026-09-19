@@ -53,6 +53,12 @@ export const encodeValueTool = tool('toolkit_encode_value', {
       .string()
       .describe('The value to transform — raw text for encode, an encoded string for decode.'),
   }),
+  /**
+   * The payload key is `value` here and `data` on toolkit_generate_qr, so a
+   * caller arriving from either side — or reaching for the generic word —
+   * lands on the one declared key rather than an unknown-key rejection.
+   */
+  inputAliases: { input: 'value', text: 'value', data: 'value' },
   output: z.object({
     encoding: z
       .enum(['base64', 'base64url', 'hex', 'url'])

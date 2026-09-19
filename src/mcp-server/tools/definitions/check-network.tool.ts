@@ -51,6 +51,12 @@ export const checkNetworkTool = tool('toolkit_check_network', {
       .default(3000)
       .describe('Per-probe deadline in milliseconds for ping and connectivity.'),
   }),
+  /**
+   * `target` takes an IP or a hostname, so a caller reaches for the narrower
+   * word for whichever one it holds — the same three spellings
+   * toolkit_geolocate_ip accepts for the same schema.
+   */
+  inputAliases: { ip: 'target', hostname: 'target', host: 'target' },
   // Flat object; the populated fields depend on mode (see each field's note).
   output: z.object({
     mode: z
@@ -97,6 +103,8 @@ export const checkNetworkTool = tool('toolkit_check_network', {
       when: 'The target is private/reserved/loopback/link-local and TOOLKIT_ALLOW_PRIVATE_NETWORK is off.',
       recovery:
         'This target is a private/reserved address. Set TOOLKIT_ALLOW_PRIVATE_NETWORK=true to permit local-network diagnostics.',
+      // NetDiagService.guardTarget raises it; the handler never names the reason.
+      thrownBy: 'service',
     },
     {
       reason: 'unreachable',
@@ -104,6 +112,8 @@ export const checkNetworkTool = tool('toolkit_check_network', {
       when: 'A hostname target could not be resolved, or traceroute could not run in this environment.',
       recovery:
         'Verify the host resolves and the diagnostic binary is available, or try mode connectivity which uses raw TCP.',
+      // NetDiagService.resolve and .traceroute raise it.
+      thrownBy: 'service',
     },
   ],
 

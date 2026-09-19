@@ -63,6 +63,12 @@ export const generateQrTool = tool('toolkit_generate_qr', {
         `Pixels per module for raster (png_base64) output. Ignored for terminal. png_base64 also bounds the whole image at ${QR_MAX_PNG_EDGE_PX} px per side, so a dense symbol or a wide margin admits a lower scale than 32.`,
       ),
   }),
+  /**
+   * The payload key is `data` here and `value` on toolkit_encode_value and
+   * toolkit_hash_value; all three name the string to encode. `content` is the
+   * output field's name, which a caller round-tripping a result reaches for.
+   */
+  inputAliases: { text: 'data', content: 'data', value: 'data' },
   // Flat object; mimeType is set for svg/png, byteLength only for png_base64.
   output: z.object({
     format: z.enum(['svg', 'png_base64', 'terminal']).describe('The format that was produced.'),
