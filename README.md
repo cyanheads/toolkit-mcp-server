@@ -1,3 +1,5 @@
+[![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.cyanheads/toolkit-mcp-server.svg)](https://mcpqueen.com/s/io.github.cyanheads/toolkit-mcp-server)
+
 <div align="center">
   <h1>@cyanheads/toolkit-mcp-server</h1>
   <p><b>Generate random IDs, QR codes, and hashes, encode and decode values, and geolocate IPs, plus gated network and system diagnostics, via MCP. STDIO or Streamable HTTP.</b>
