@@ -51,11 +51,33 @@ const VALID_INPUT: Record<string, Record<string, unknown>> = {
 describe('tool wire contract', () => {
   it.each([
     [encodeValueTool, { operation: 'decode', encoding: 'hex', value: 'xz' }, 'decode_failed'],
+    [encodeValueTool, { operation: 'decode', encoding: 'hex', value: 'ff00fe' }, 'decode_not_utf8'],
+    [
+      encodeValueTool,
+      { operation: 'encode', encoding: 'hex', value: 'abc', outputEncoding: 'hex' },
+      'output_encoding_not_applicable',
+    ],
     [hashValueTool, { operation: 'compare', value: 'abc' }, 'missing_expected'],
+    [
+      hashValueTool,
+      { operation: 'generate', value: 'abc', expected: 'deadbeef' },
+      'expected_without_compare',
+    ],
     [
       hashValueTool,
       { operation: 'compare', value: 'abc', expected: 'bad' },
       'expected_length_mismatch',
+    ],
+    [hashValueTool, { operation: 'compare', value: 'abc', expected: '#' }, 'expected_malformed'],
+    [
+      hashValueTool,
+      { value: 'abc', expected: `sha512-${Buffer.alloc(64).toString('base64')}` },
+      'expected_algorithm_mismatch',
+    ],
+    [
+      hashValueTool,
+      { value: 'abc', algorithm: 'sha1', digestEncoding: 'sri' },
+      'sri_unsupported_algorithm',
     ],
     [hashValueTool, { value: 'xz', inputEncoding: 'hex' }, 'invalid_input_encoding'],
     [generateQrTool, { data: 'x'.repeat(2953), errorCorrection: 'M' }, 'data_too_large'],
