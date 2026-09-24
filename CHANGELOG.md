@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.3.1](changelog/2.3.x/2.3.1.md) — 2026-09-23
+
+toolkit_check_network ping now throws unreachable on a genuine diagnostic failure instead of reporting reachable:false, connectivity gains a typed outcome, and toolkit_check_system memory reports container-aware availableBytes/limitBytes.
+
 ## [2.3.0](changelog/2.3.x/2.3.0.md) — 2026-09-23 · ⚠️ Breaking
 
 toolkit_encode_value decode is now byte-exact via outputEncoding, toolkit_hash_value adds sha384/base64/SRI digests, toolkit_generate_qr terminal output drops ANSI escapes, and toolkit_generate_id randomizes same-millisecond id steps.
