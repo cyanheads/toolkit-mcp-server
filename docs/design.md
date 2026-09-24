@@ -12,10 +12,10 @@ This doc formalizes `docs/idea.md` into a buildable spec. The tool names are fix
 
 | Tool | Summary | readOnlyHint | openWorldHint | Key inputs | Output shape |
 |---|---|---|---|---|---|
-| `toolkit_hash_value` | Generate a digest or constant-time-compare a value against an expected digest. | `true` | `false` | `operation` (`generate`\|`compare`), `value`, `algorithm` (`sha256`\|`sha512`\|`sha1`\|`md5`), `expected` (compare only), `inputEncoding` (`utf8`\|`hex`\|`base64` — default `utf8`) | `{ algorithm, operation, digest?, matches?, lengthInBytes? }` |
+| `toolkit_hash_value` | Generate a digest or constant-time-compare a value against an expected digest. | `true` | `false` | `operation` (`generate`\|`compare` — omitted resolves to `compare` when `expected` is sent, else `generate`), `value`, `algorithm` (`sha256`\|`sha384`\|`sha512`\|`sha1`\|`md5`), `digestEncoding` (`hex`\|`base64`\|`sri` — default `hex`, generate only), `expected` (hex, base64, or one or more SRI entries; compare only), `inputEncoding` (`utf8`\|`hex`\|`base64` — default `utf8`) | `{ algorithm, operation, digest?, matches?, lengthInBytes? }` |
 | `toolkit_generate_id` | Mint cryptographically-random identifiers (UUIDv4/UUIDv7/ULID), single or batch. | `true`¹ | `false` | `type` (`uuid_v4`\|`uuid_v7`\|`ulid`), `count` | `{ type, ids[], count }` |
 | `toolkit_generate_qr` | Encode text/URL into a QR code as SVG markup, base64 PNG bytes, or a terminal-renderable string. | `true` | `false` | `data`, `format` (`svg`\|`png_base64`\|`terminal`), `errorCorrection`, `margin`, `scale` | `{ format, content, mimeType?, byteLength?, version }` |
-| `toolkit_encode_value` | Encode or decode a value across base64 / base64url / hex / URL. | `true` | `false` | `operation` (`encode`\|`decode`), `encoding`, `value` | `{ encoding, operation, result }` |
+| `toolkit_encode_value` | Encode or decode a value across base64 / base64url / hex / URL. | `true` | `false` | `operation` (`encode`\|`decode`), `encoding`, `value`, `outputEncoding` (`utf8`\|`hex`\|`base64` — decode only; omitted means `utf8`) | `{ encoding, operation, outputEncoding?, result }` |
 | `toolkit_geolocate_ip` | Resolve a public IP (or hostname) to geographic and network metadata via an external geo API. | `true` | `true` | `target` (IPv4/IPv6/hostname) | `{ target, resolvedIp, country, countryCode, region, city, latitude, longitude, asn, org, timezone, proxy, hosting, mobile, source }` |
 | `toolkit_check_network` | **Gated.** Network diagnostics — ping, traceroute, TCP connectivity, or host egress-IP detection. | `true` | `true` | `mode` (`ping`\|`traceroute`\|`connectivity`\|`public_ip`), `target` (required for all modes except `public_ip`), `port` (connectivity only), `count`, `timeoutMs` | `{ mode, target?, reachable?, hops?, rttMs?, publicIp? }` |
 | `toolkit_check_system` | **Gated.** Host system facts — OS, CPU, memory, load average, or network interfaces. | `true` | `false` | `what` (`os`\|`cpu`\|`memory`\|`load`\|`interfaces`) | `{ what, ...facetFields }` |
@@ -58,10 +58,10 @@ Primary agent workflows: "give me 5 ULIDs for these records", "turn this URL int
 
 - Five always-on tools register on every transport and every deployment with zero configuration: `toolkit_hash_value`, `toolkit_generate_id`, `toolkit_generate_qr`, `toolkit_encode_value`, `toolkit_geolocate_ip`.
 - Two gated tools register only when their enable-flag is set: `toolkit_check_network`, `toolkit_check_system`.
-- Hashing supports sha256 (default), sha512, sha1, md5. `compare` is **constant-time** (`crypto.timingSafeEqual`). md5/sha1 are exposed for checksum/compatibility only and the description must say "not for security". `inputEncoding` (`utf8` default | `hex` | `base64`) controls how `value` and `expected` are interpreted before hashing — necessary so the agent can hash raw binary data supplied as hex or base64 without round-tripping through a decode step.
+- Hashing supports sha256 (default), sha384, sha512, sha1, md5. `compare` is **constant-time** (`crypto.timingSafeEqual`). md5/sha1 are exposed for checksum/compatibility only and the description must say "not for security". `inputEncoding` (`utf8` default | `hex` | `base64`) controls how `value` is interpreted before hashing — necessary so the agent can hash raw binary data supplied as hex or base64 without round-tripping through a decode step. `digestEncoding` (`hex` default | `base64` | `sri`) sets the generated digest's form; `expected` is accepted as hex, base64, or SRI and recognized by shape at the algorithm's digest length, since the most common published digests (npm lockfile `integrity`, Subresource Integrity, `Content-MD5`, `x-amz-checksum-sha256`) are base64 or SRI, not hex.
 - ID generation uses the platform CSPRNG for all three types and supports batch via `count` (Zod `.max(1000)` — large enough for any realistic batch, small enough to keep the response inline without truncation).
-- QR generation emits SVG (text), base64-encoded PNG, or a terminal string, with configurable error-correction level, quiet-zone margin, and module scale.
-- Encoding covers base64, base64url, hex, URL — both directions.
+- QR generation emits SVG (text, sized `(modules + 2 × margin) × scale` px), base64-encoded PNG, or a terminal string of plain Unicode half-blocks, with configurable error-correction level, quiet-zone margin, and module scale.
+- Encoding covers base64, base64url, hex, URL — both directions. Decode is byte-preserving: `outputEncoding` returns the recovered bytes as UTF-8 text (default, fatal on invalid UTF-8), hex, or base64, so binary payloads and digests transcode without loss. Whitespace in hex/base64/base64url input is ignored.
 - Geolocation accepts an IP **or** a hostname, resolves to country/region/city, lat/lon, ASN/org, timezone, and reports its `source` provider. It is cached and rate-limited.
 - `toolkit_check_network` supports `ping`, `traceroute`, `connectivity` (TCP reachability — host via `target`, port via separate `port` param, not inline `host:port` syntax), and `public_ip` (host egress IP — `target` is absent/ignored for this mode). Private/reserved/loopback/link-local targets are **rejected** unless `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`.
 - `toolkit_check_system` reports host OS, CPU, memory, load, or interfaces.
@@ -88,13 +88,13 @@ Bulk port-scanning, arbitrary-command exec, and arbitrary-URL fetch do **not** b
 No persistent entities — the server holds no durable records, so there is no opaque-ID lifecycle for an agent to navigate. Inputs are self-supplied (a string to hash, data to encode) or a single network identifier (an IP/hostname the agent already has). The "identifiers" the server deals in are well-known public formats, not server-minted handles:
 
 ```ts
-/** Hash result. `digest` is lowercase hex; `matches` only on operation:'compare'. */
+/** Hash result. `digest` follows `digestEncoding`; `matches` only on operation:'compare'. */
 type HashResult = {
-  algorithm: 'sha256' | 'sha512' | 'sha1' | 'md5';
-  operation: 'generate' | 'compare';
-  digest?: string;          // generate: lowercase hex digest
+  algorithm: 'sha256' | 'sha384' | 'sha512' | 'sha1' | 'md5';
+  operation: 'generate' | 'compare';  // resolved: an omitted operation is reported as what ran
+  digest?: string;          // generate: lowercase hex, base64, or `<algorithm>-<base64>`
   matches?: boolean;        // compare: constant-time equality result
-  lengthInBytes?: number;   // digest byte length (32 for sha256, 64 for sha512, …)
+  lengthInBytes?: number;   // digest byte length (32 for sha256, 48 for sha384, 64 for sha512, …)
 };
 
 /** Generated identifiers — minted, not looked up. */
@@ -117,6 +117,7 @@ type QrResult = {
 type EncodeResult = {
   encoding: 'base64' | 'base64url' | 'hex' | 'url';
   operation: 'encode' | 'decode';
+  outputEncoding?: 'utf8' | 'hex' | 'base64';  // decode only: how `result` renders the bytes
   result: string;
 };
 
@@ -240,9 +241,9 @@ Most tools are single-call and self-contained — no cross-tool ID handoff exist
 
 | # | Call | Purpose |
 |---|---|---|
-| 1 | `toolkit_hash_value` `{ operation: 'compare', algorithm: 'sha256', value: <downloaded-bytes-or-hex>, expected: <vendor-digest> }` | Constant-time compare in one call — the agent does **not** call `generate` then eyeball-match; `compare` is the safe path. |
+| 1 | `toolkit_hash_value` `{ operation: 'compare', algorithm: 'sha256', value: <downloaded-bytes-or-hex>, expected: <vendor-digest> }` | Constant-time compare in one call — the agent does **not** call `generate` then eyeball-match; `compare` is the safe path. `expected` may be the vendor's hex, base64, or SRI string as published. |
 
-The lesson the description must teach: use `operation: 'compare'` with `expected`, not `generate` + manual string equality (timing-unsafe, error-prone for the model).
+The lesson the description must teach: use `operation: 'compare'` with `expected`, not `generate` + manual string equality (timing-unsafe, error-prone for the model). Sending `expected` without `operation` also compares, so the natural "check this against the checksum" call shape never silently degrades to a bare digest.
 
 **2. Make a scannable QR for a generated identifier** (the one genuine cross-tool hop):
 
@@ -278,6 +279,12 @@ No `check_network` dependency — geolocation calls the provider, never the targ
 - **`generate_id` is `readOnlyHint: true` / `idempotentHint: false`.** The two hints answer different questions: read-only asks whether the tool modifies its environment (it does not — it draws entropy and returns it), idempotent asks whether repeat calls add no further effect (they do not repeat — fresh entropy is the feature). `idempotentHint: false` alone carries the don't-cache signal, so claiming a write to get it buckets a side-effect-free tool with genuinely mutating ones and degrades every caller's approval flow.
 - **md5/sha1 stay, flagged.** Not a host-security risk (checksums here, not password/signature crypto); dropping them breaks legit file-integrity checks against vendor-published MD5s. Default to sha256; the description says "checksum/compat only — not for security." Keeping them avoids forcing the agent to a sandbox for a routine vendor-checksum match.
 - **`compare` is constant-time.** `crypto.timingSafeEqual`, exposed as a first-class operation so the model never reaches for timing-unsafe string equality.
+- **`expected` and `outputEncoding` are never silently ignored.** `hash_value`'s `operation` and `encode_value`'s `outputEncoding` carry no schema default so the handler can tell omission from an explicit value; `expected` with an omitted operation compares, and an explicit field that contradicts another (`generate` + `expected`, `encode` + `outputEncoding`) is a typed error rather than a silent no-op.
+- **`expected` is read by shape, scoped to the algorithm.** A string of only hex digits is always read as hex, anything else in the base64 alphabet as base64: a hex digest of another algorithm can have a valid base64 length (64 hex characters decode to 48 bytes, a sha384 digest), so trying base64 after a failed hex reading would answer `matches: false` where the real problem is the algorithm. SRI is recognized by its `sha256-`/`sha384-`/`sha512-` prefix, and a value may carry several space-separated entries, as npm `integrity` can: entries for other algorithms are skipped, it matches when any entry for `algorithm` does, and no entry for `algorithm` is `expected_algorithm_mismatch`. A string in a digest alphabet at the wrong length stays `expected_length_mismatch`, its hint naming the algorithm that length belongs to; only unrecognizable input is `expected_malformed`.
+- **Decode never substitutes bytes.** UTF-8 output uses a fatal, BOM-preserving decoder, so non-text bytes fail with `decode_not_utf8` (pointing at `outputEncoding` hex/base64) instead of becoming U+FFFD; a `url` value holding an unpaired surrogate fails `decode_failed` rather than being written out as U+FFFD's bytes.
+- **Same-millisecond uuid_v7/ulid steps are random.** Within one millisecond a batch advances its suffix by a fresh 32-bit draw plus one, not by one, so the batch stays strictly increasing while no id is derivable from its neighbour — RFC 9562 §6.2 advises against a +1 counter for unguessable ids. This departs from the ULID reference increment on purpose, since the tool's unpredictability claim covers both formats. Overflow is detected on the unmasked sum and falls back to advancing the timestamp and redrawing.
+- **Terminal QR is plain half-blocks, drawn for a dark background.** No ANSI escapes, fenced in `content[]`; light modules (quiet zone included) are ink and dark modules are spaces, so the grid keeps correct polarity without setting a background color. `margin` sets its quiet zone like the other formats.
+- **SVG honors `scale` as presentational size.** `width`/`height` are `(modules + 2 × margin) × scale`; the markup is still vector, so the PNG pixel budget does not apply.
 - **Geolocation is the lone external dep**, so the only tool with a resilience layer (retry/backoff/cache) and `openWorldHint: true`. Default to a keyless-tier provider (ip-api class) for a zero-config hosted profile; provider/key are overridable for operators who want a richer source.
 - **Hostname input on geo/network tools** is accepted and DNS-resolved server-side (`resolvedIp` echoed back) — agents routinely hold a hostname, not an IP, and forcing a separate resolve step is friction. The private-range guard runs **after** resolution so a hostname can't smuggle a request to an internal IP.
 - **No resources, no prompts.** Nothing is a durable addressable entity; nothing is a recurring multi-step pattern. A tool-only client gets the full server.
@@ -292,24 +299,32 @@ Typed contracts (`errors: [{ reason, code, when, recovery }]`) where a domain fa
 
 | Tool | reason | code | when | recovery |
 |---|---|---|---|---|
-| `toolkit_hash_value` | `missing_expected` | `InvalidParams` | `operation: 'compare'` with no `expected` digest | "Provide `expected` (the digest to compare against) when operation is 'compare'." |
-| `toolkit_hash_value` | `expected_length_mismatch` | `InvalidParams` | `expected` length ≠ the algorithm's digest length (compare would always fail) | "The expected digest length doesn't match {algorithm}. Check the algorithm or the expected value." |
-| `toolkit_hash_value` | `invalid_input_encoding` | `InvalidParams` | `value` or `expected` is not valid for the declared `inputEncoding` (e.g. non-hex chars when `inputEncoding: 'hex'`) | "Input is not valid {inputEncoding}. Verify the encoding matches the actual byte representation." |
-| `toolkit_generate_qr` | `data_too_large` | `InvalidParams` | `data` exceeds QR capacity at the chosen `errorCorrection` level (the 2953-byte schema cap is the level-L ceiling, so M/Q/H run out sooner) | "Shorten data, or lower errorCorrection (H→Q→M→L) to raise capacity, then retry." |
-| `toolkit_generate_qr` | `raster_too_large` | `InvalidParams` | `format: 'png_base64'` and (modules + 2 × `margin`) × `scale` exceeds the 2048 px edge budget | "Lower scale (and margin if needed) so the rendered image stays within 2048 px per side, or request format svg, which has no raster budget." |
-| `toolkit_encode_value` | `decode_failed` | `InvalidParams` | `operation: 'decode'` on a value malformed for `encoding` | "Value isn't valid {encoding}. Verify the encoding matches the input, or switch operation to 'encode'." |
-| `toolkit_geolocate_ip` | `unresolvable_host` | `InvalidParams` | hostname target fails DNS resolution | "Hostname didn't resolve. Verify it, or pass an IP address directly." |
-| `toolkit_geolocate_ip` | `private_target` | `InvalidParams` | target resolves to a private/reserved IP (no public geolocation exists for RFC-1918/reserved ranges) | "Private/reserved addresses have no public geolocation. Pass a public IP." |
-| `toolkit_check_network` | `private_target_blocked` | `InvalidParams` | target is private/reserved/loopback/link-local and `TOOLKIT_ALLOW_PRIVATE_NETWORK` is off | "This target is a private/reserved address. Set TOOLKIT_ALLOW_PRIVATE_NETWORK=true to permit local-network diagnostics." |
-| `toolkit_check_network` | `unreachable` | (success, not error) | ping/connectivity finds the host down | — reported as `reachable: false` in output, **not** thrown; an unreachable host is a valid result the agent acts on. |
+| `toolkit_hash_value` | `missing_expected` | `ValidationError` | operation is "compare" but no expected digest was supplied. | Provide expected (the digest to compare against) when operation is "compare". |
+| `toolkit_hash_value` | `expected_without_compare` | `ValidationError` | operation is "generate" but an expected digest was also supplied, so it would be ignored. | Set operation to "compare" (or omit it) to check value against expected, or drop expected to generate a digest. |
+| `toolkit_hash_value` | `expected_malformed` | `ValidationError` | expected is not a hex, standard base64, or sha256/sha384/sha512 SRI digest, or an SRI value holds a token that is not an SRI entry. | Pass expected as a hex digest, a standard base64 digest, or SRI entries such as sha512-&lt;base64&gt;, space-separated when there are several. |
+| `toolkit_hash_value` | `expected_length_mismatch` | `ValidationError` | expected is a recognized digest form but its length does not match the algorithm, so compare would always fail. | The expected digest length doesn't match the algorithm. Set algorithm to the one that length belongs to, or check the expected value. |
+| `toolkit_hash_value` | `expected_algorithm_mismatch` | `ValidationError` | expected is SRI and none of its entries names the chosen algorithm. | Set algorithm to one named in the SRI prefix of expected, or pass a digest made with the chosen algorithm. |
+| `toolkit_hash_value` | `sri_unsupported_algorithm` | `ValidationError` | digestEncoding is "sri" and algorithm is md5 or sha1, which SRI does not define. | Use algorithm sha256, sha384, or sha512 for an SRI digest, or set digestEncoding to base64 or hex. |
+| `toolkit_hash_value` | `invalid_input_encoding` | `ValidationError` | value is not valid for the declared inputEncoding (e.g. non-hex characters with inputEncoding "hex"). | Input is not valid for the declared inputEncoding. Verify the encoding matches the byte representation. |
+| `toolkit_generate_qr` | `data_too_large` | `ValidationError` | data exceeds the QR capacity for the chosen errorCorrection level and encoding mode. | Shorten data, or lower errorCorrection (H→Q→M→L) to raise capacity, then retry. |
+| `toolkit_generate_qr` | `raster_too_large` | `ValidationError` | format is png_base64 and (modules + 2 × margin) × scale exceeds the pixel budget. | Lower scale (and margin if needed) so the rendered image stays within 2048 px per side, or request format svg, which has no raster budget. |
+| `toolkit_encode_value` | `decode_failed` | `ValidationError` | operation is "decode" but value is malformed for the chosen encoding. | Value isn't valid for the chosen encoding. Verify the encoding matches the input, or switch operation to 'encode'. |
+| `toolkit_encode_value` | `decode_not_utf8` | `ValidationError` | operation is "decode", outputEncoding is utf8 (or omitted), and the decoded bytes are not valid UTF-8 text. | The decoded bytes are binary, not UTF-8 text. Retry with outputEncoding 'hex' or 'base64' to receive the raw bytes losslessly. |
+| `toolkit_encode_value` | `output_encoding_not_applicable` | `ValidationError` | operation is "encode" and outputEncoding was supplied; it selects how decoded bytes are returned. | outputEncoding applies only to decode. Drop outputEncoding to encode text, or set operation to 'decode'. |
+| `toolkit_geolocate_ip` | `unresolvable_host` | `ValidationError` | A hostname target failed DNS resolution. | Hostname didn't resolve. Verify it, or pass an IP address directly. |
+| `toolkit_geolocate_ip` | `private_target` | `ValidationError` | The target resolves to a private/reserved IP with no public geolocation. | Private/reserved addresses have no public geolocation. Pass a public IP address. |
+| `toolkit_check_network` | `private_target_blocked` | `ValidationError` | The target is private/reserved/loopback/link-local and TOOLKIT_ALLOW_PRIVATE_NETWORK is off. | This target is a private/reserved address. Set TOOLKIT_ALLOW_PRIVATE_NETWORK=true to permit local-network diagnostics. |
+| `toolkit_check_network` | `unreachable` | `ServiceUnavailable` | A hostname target could not be resolved, or traceroute could not run in this environment. | Verify the host resolves and the diagnostic binary is available, or try mode connectivity which uses raw TCP. |
 
-`toolkit_generate_id` and `toolkit_check_system` have no domain-specific failure contract — bad input is caught by Zod (`ValidationError`), and there's no partial-success or multi-step finalize. `generate_qr`'s two reasons both cover limits the schema cannot express on its own: `data` is capped at `z.string().max(2953)` (the byte ceiling for version 40 at level L), but capacity at M/Q/H is lower and the rendered pixel count is a product of three inputs, so each is checked in the handler and surfaced as a typed reason rather than a raw library failure.
+A host that is simply down is not an error: ping and connectivity report it as `reachable: false`, a valid result the agent acts on. The `unreachable` reason covers only the cases where no diagnosis could run at all.
+
+`toolkit_generate_id` and `toolkit_check_system` have no domain-specific failure contract — bad input is rejected at the schema as `InvalidParams`, and there's no partial-success or multi-step finalize. `generate_qr`'s two reasons both cover limits the schema cannot express on its own: `data` is capped at `z.string().max(2953)`, a character count that only bounds the real limit — capacity is 2953 UTF-8 bytes at version 40, level L, lower at M/Q/H — and the rendered pixel count is a product of three inputs, so each is checked in the handler and surfaced as a typed reason rather than a raw library failure. `hash_value`'s `expected_without_compare` and `encode_value`'s `output_encoding_not_applicable` reject a contradiction between two supplied fields rather than ignoring one of them, which is also why neither tool gives the discriminating field (`operation`, `outputEncoding`) a schema default: the handler has to see whether it was sent.
 
 ---
 
 ## Output Design Notes
 
-- **`format()` content-complete on every tool.** Hash → the digest (or match verdict) in a code span; QR `terminal` → the renderable block, `svg`/`png_base64` → a note plus byte length (not the full blob inline for PNG); geo → a labeled summary (country, city, ASN/org, coords). Every `output` field the model needs appears in the rendered text — `format-parity` enforces it.
+- **`format()` content-complete on every tool.** Hash → the digest (or match verdict) in a code span; QR `terminal` → the renderable block inside a code fence (so a Markdown client keeps the spaces that are its dark modules), `svg` → the markup, `png_base64` → a note plus byte length (not the full blob inline for PNG); geo → a labeled summary (country, city, ASN/org, coords). Every `output` field the model needs appears in the rendered text — `format-parity` enforces it.
 - **Batch ID disclosure.** `toolkit_generate_id` with a large `count` is bounded by `z.number().int().min(1).max(1000)` — not a silently truncated list. `count` is small enough that no truncation/`ctx.enrich.truncated` is needed; the array is always complete.
 - **Geolocation preserves uncertainty.** Sparse upstream fields stay nullable in both `structuredContent` and `format()`. The render says "ASN: unknown" rather than omitting or inventing. Tests include a sparse payload (reserved range, free-tier ASN omission).
 - **PNG bytes don't bloat context.** `png_base64` returns the base64 string in `content` (the artifact the model can't emit, so it must be returned) but `format()` summarizes ("PNG, {byteLength} bytes, QR version {version}") rather than dumping the base64 into the markdown trailer twice.

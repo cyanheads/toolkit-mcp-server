@@ -35,7 +35,7 @@ A standalone developer-utilities server — the five always-on tools need no ups
 
 | Tool | Description |
 |:---|:---|
-| `toolkit_hash_value` | Generate a cryptographic digest (sha256/sha512/sha1/md5), or constant-time-compare a value against an expected digest. |
+| `toolkit_hash_value` | Generate a cryptographic digest (sha256/sha384/sha512/sha1/md5) as hex, base64, or SRI, or constant-time-compare a value against an expected digest. |
 | `toolkit_generate_id` | Mint cryptographically-random identifiers — UUIDv4, UUIDv7, or ULID — singly or in batches up to 1000. |
 | `toolkit_generate_qr` | Encode text or a URL into a QR code as SVG markup, base64 PNG, or a terminal-renderable string. |
 | `toolkit_encode_value` | Encode or decode a value across base64, base64url, hex, or URL percent-encoding, in either direction. |
@@ -47,10 +47,13 @@ A standalone developer-utilities server — the five always-on tools need no ups
 
 ### `toolkit_hash_value` <sub>tool</sub>
 
-- `operation`: `generate` (lowercase-hex digest) or `compare` (timing-safe check via `timingSafeEqual`)
-- Algorithms: `sha256` (default) and `sha512` for security; `sha1` and `md5` are exposed for checksum and file-integrity compatibility only — never for passwords or signatures
+- `operation`: `generate` (a digest) or `compare` (timing-safe check via `timingSafeEqual`); omitted, it compares when `expected` is sent and generates otherwise. `generate` sent together with `expected` is rejected with a typed `expected_without_compare` error rather than ignoring `expected`
+- Algorithms: `sha256` (default), `sha384`, and `sha512` for security; `sha1` and `md5` are exposed for checksum and file-integrity compatibility only — never for passwords or signatures
+- `digestEncoding` sets the generated digest's form: `hex` (lowercase, default), `base64`, or `sri` (`sha512-<base64>`, the npm lockfile `integrity` and Subresource Integrity form — sha256/sha384/sha512 only)
+- `expected` is accepted as hex, base64, or SRI, recognized by its shape at the algorithm's digest length, so a published checksum is pasted as-is. An SRI value may hold several space-separated entries, as an npm `integrity` field can: entries for other algorithms are skipped, and it matches when any entry for `algorithm` does
+- Typed errors separate an unrecognizable digest (`expected_malformed`), one of the wrong length (`expected_length_mismatch`, whose hint names the algorithm that length belongs to), and an SRI value with no entry for `algorithm` (`expected_algorithm_mismatch`)
 - `inputEncoding` reads `value` as `utf8` (default), `hex`, or `base64`, so binary blobs skip a decode round-trip
-- Canonical use: match a download against a vendor-published checksum
+- Canonical use: match a download against a vendor-published checksum or a lockfile integrity entry
 
 ---
 
@@ -58,26 +61,30 @@ A standalone developer-utilities server — the five always-on tools need no ups
 
 - `type`: `uuid_v4` (random, default), `uuid_v7` (time-ordered, sortable by creation), or `ulid` (26-char Crockford base32, lexicographically sortable)
 - `count` mints a batch up to 1000 in one call; the returned `ids` array always holds exactly `count` values
-- `uuid_v7` and `ulid` batches are monotonic — strictly increasing even within the same millisecond — so `ids` stays in sorted creation order
+- `uuid_v7` and `ulid` batches are monotonic — strictly increasing even within the same millisecond — so `ids` stays in sorted creation order. Ids minted in the same millisecond are separated by random gaps (a 32-bit draw plus one), so no id in a batch is derivable from another; for `ulid` this departs from the spec's reference +1 increment on purpose
 - Read-only — minting changes nothing — but never idempotent, so a client won't cache or deduplicate a batch
 
 ---
 
 ### `toolkit_generate_qr` <sub>tool</sub>
 
-- `format`: `svg` (inline markup), `png_base64` (raster bytes with `mimeType` and `byteLength`), or `terminal` (Unicode block string)
-- `errorCorrection` (L/M/Q/H) trades data capacity for damage tolerance; `margin` sets the quiet-zone width; `scale` sets pixels per module for raster output
+- `format`: `svg` (inline markup), `png_base64` (raster bytes with `mimeType` and `byteLength`), or `terminal` (plain Unicode half-blocks with no escape codes, fenced in `content[]`)
+- `terminal` is drawn for a dark background: light modules, quiet zone included, are blocks and dark modules are spaces
+- `errorCorrection` (L/M/Q/H) trades data capacity for damage tolerance; `margin` sets the quiet-zone width in modules for every format; `scale` sets pixels per module for `svg` (its `width`/`height`) and `png_base64`, so both are `(modules + 2 × margin) × scale` px per side
 - The returned `version` (1–40) reflects how dense the encoded data is
 - `png_base64` also arrives as an MCP image content block, so a client reading `content[]` can render the code without decoding `structuredContent`
 - A rendered PNG is bounded at 2048 px per side — `(modules + 2 × margin) × scale` — so a dense symbol at a high `scale` is rejected with a typed `raster_too_large` error naming a scale that fits; `svg` and `terminal` are unbounded
-- `data` is capped at 2953 bytes — the absolute ceiling (version 40, level L, byte mode); usable capacity is lower at higher `errorCorrection` levels, so over-capacity input is rejected with a typed `data_too_large` error rather than a generic failure
+- `data` is encoded as UTF-8 and capped at 2953 bytes — the absolute ceiling (version 40, level L, byte mode); a non-ASCII character takes 2–4 bytes, and usable capacity is lower at higher `errorCorrection` levels, so over-capacity input is rejected with a typed `data_too_large` error that reports the payload's byte count
 
 ---
 
 ### `toolkit_encode_value` <sub>tool</sub>
 
 - `encoding`: `base64`, `base64url` (URL-safe alphabet), `hex`, or `url` (percent-encoding)
-- `operation`: `encode` (raw UTF-8 → encoding) or `decode` (encoded value → text)
+- `operation`: `encode` (raw UTF-8 → encoding) or `decode` (encoded value → bytes)
+- `outputEncoding` (decode only) returns the recovered bytes as `utf8` text (when omitted), `hex`, or `base64` — lossless for binary data, and a direct transcode between encodings (a base64 digest to hex, for example). Sent with `encode`, it is rejected with a typed `output_encoding_not_applicable` error
+- Decode never substitutes replacement characters: bytes that aren't valid UTF-8 return a typed `decode_not_utf8` error pointing at `outputEncoding`, and a leading byte-order mark is kept
+- Whitespace in `hex`, `base64`, and `base64url` input is ignored, so line-wrapped MIME and PEM bodies decode as-is (without PEM's `-----BEGIN/END-----` lines, which aren't base64); a `url` value is taken literally
 - Malformed decode input returns a typed `decode_failed` error with a recovery hint, not a silent best-effort
 
 ---
@@ -127,7 +134,7 @@ Agent-friendly output:
 - Provenance — geolocation echoes `resolvedIp` (the IP actually located) and `source` (the answering provider); absent upstream fields are reported as unknown, never invented
 - Response shaping — provider-supplied strings (`org`, `isp`, `as`) are length-bounded and stripped of control characters before they reach the response, so untrusted registry text can't flood or format a model's context
 - Discriminated output contracts — `operation`, `format`, `mode`, and `what` fields echo back exactly what ran, with only the branch-relevant fields populated per call; an unreachable host in `toolkit_check_network` reports `reachable: false` as valid data, not an error
-- Typed failure reasons — decode, geolocation, and network failures each carry a structured `reason` plus a next-step recovery hint (e.g. `decode_failed`, `raster_too_large`, `private_target_blocked`)
+- Typed failure reasons — decode, hashing, QR, geolocation, and network failures each carry a structured `reason` plus a next-step recovery hint (e.g. `decode_not_utf8`, `expected_malformed`, `raster_too_large`, `private_target_blocked`); `expected` sent with `generate`, and `outputEncoding` sent with `encode`, are rejected by name rather than silently ignored
 
 ## Getting started
 
