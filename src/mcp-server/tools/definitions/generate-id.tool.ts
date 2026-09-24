@@ -23,17 +23,22 @@ function randomBigInt(bits: number): bigint {
 
 /**
  * Mint a monotonic batch of `count` time-ordered identifiers. Within a single
- * millisecond the random suffix is incremented (not redrawn), so the batch is
- * strictly increasing and therefore lexicographically sorted by creation — the
- * contract uuid_v7 and ulid advertise. `randBits` sizes the random suffix (74
- * for UUIDv7, 80 for ULID); `encode` lays the timestamp + suffix into a string.
+ * millisecond the random suffix advances by a fresh random step — a 32-bit
+ * draw plus one — rather than being redrawn, so the batch is strictly
+ * increasing and therefore lexicographically sorted by creation, the contract
+ * uuid_v7 and ulid advertise. A constant +1 step would make every id after the
+ * first derivable from any other (RFC 9562 §6.2 advises against it for
+ * unguessable ids); the random step keeps neighbours unpredictable, which
+ * departs on purpose from the ULID reference increment. `randBits` sizes the
+ * random suffix (74 for UUIDv7, 80 for ULID); `encode` lays the timestamp +
+ * suffix into a string.
  */
 function monotonicBatch(
   count: number,
   randBits: number,
   encode: (ms: bigint, rand: bigint) => string,
 ): string[] {
-  const randMask = (1n << BigInt(randBits)) - 1n;
+  const randMax = (1n << BigInt(randBits)) - 1n;
   const ids: string[] = [];
   let lastMs = -1n;
   let lastRand = 0n;
@@ -43,13 +48,14 @@ function monotonicBatch(
     if (ms > lastMs) {
       rand = randomBigInt(randBits);
     } else {
-      // Same (or backward) clock reading: hold the highest ms seen and bump the
-      // suffix, so ordering is preserved without waiting on the wall clock.
+      // Same (or backward) clock reading: hold the highest ms seen and advance
+      // the suffix, so ordering is preserved without waiting on the wall clock.
       ms = lastMs;
-      rand = (lastRand + 1n) & randMask;
-      if (rand === 0n) {
-        // Suffix wrapped within one ms (unreachable for count ≤ 1000) — step the
-        // timestamp and redraw rather than emit a colliding/out-of-order id.
+      rand = lastRand + randomBigInt(32) + 1n;
+      if (rand > randMax) {
+        // The step carried past the suffix width — compared unmasked, since a
+        // random step can wrap to any value, not just zero. Step the timestamp
+        // and redraw rather than emit a colliding or out-of-order id.
         ms = lastMs + 1n;
         rand = randomBigInt(randBits);
       }
@@ -95,7 +101,7 @@ function encodeUlid(ms: bigint, rand: bigint): string {
 export const generateIdTool = tool('toolkit_generate_id', {
   title: 'toolkit-mcp-server: generate id',
   description:
-    'Mint cryptographically-random identifiers using the platform CSPRNG — the correct source for IDs that must be unpredictable, unlike model-generated values. type selects the format: uuid_v4 (random, the default), uuid_v7 (time-ordered, sortable by creation), or ulid (26-char Crockford-base32, lexicographically sortable). Set count to mint a batch in one call (up to 1000); the returned ids array always contains exactly count values and is never truncated. For uuid_v7 and ulid, a batch is monotonic — strictly increasing even within the same millisecond — so the ids array stays in sorted creation order. IDs from this tool feed into toolkit_generate_qr (pass ids[0] as data) to create a scannable code.',
+    'Mint cryptographically-random identifiers using the platform CSPRNG — the correct source for IDs that must be unpredictable, unlike model-generated values. type selects the format: uuid_v4 (random, the default), uuid_v7 (time-ordered, sortable by creation), or ulid (26-char Crockford-base32, lexicographically sortable). Set count to mint a batch in one call (up to 1000); the returned ids array always contains exactly count values and is never truncated. For uuid_v7 and ulid, a batch is monotonic — strictly increasing even within the same millisecond — so the ids array stays in sorted creation order; ids minted in the same millisecond are separated by random gaps, so no id in a batch can be derived from another. IDs from this tool feed into toolkit_generate_qr (pass ids[0] as data) to create a scannable code.',
   // Two independent questions, answered separately. readOnlyHint: does the tool
   // modify its environment? It does not — it draws from the CSPRNG and returns
   // the bytes — so claiming a write would bucket it with genuinely mutating
@@ -124,7 +130,7 @@ export const generateIdTool = tool('toolkit_generate_id', {
     ids: z
       .array(z.string().describe('A single minted identifier.'))
       .describe(
-        'The minted identifiers — exactly count of them, in mint order; for uuid_v7 and ulid that order is strictly increasing (sorted by creation).',
+        'The minted identifiers — exactly count of them, in mint order; for uuid_v7 and ulid that order is strictly increasing (sorted by creation), with random gaps between ids minted in the same millisecond.',
       ),
     count: z.number().describe('The number of identifiers minted (equals the requested count).'),
   }),
