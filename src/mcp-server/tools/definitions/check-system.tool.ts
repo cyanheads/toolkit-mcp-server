@@ -9,9 +9,55 @@
  * @module mcp-server/tools/definitions/check-system.tool
  */
 
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import process from 'node:process';
 import { tool, z } from '@cyanheads/mcp-ts-core';
+
+/** Current memory use of this process's cgroup — v2 first, then the v1 hierarchy. */
+const CGROUP_USAGE_FILES = [
+  '/sys/fs/cgroup/memory.current',
+  '/sys/fs/cgroup/memory/memory.usage_in_bytes',
+];
+
+/** The cgroup's current memory use in bytes, or undefined when neither file is readable. */
+function readCgroupUsage(): number | undefined {
+  for (const path of CGROUP_USAGE_FILES) {
+    try {
+      return Number(readFileSync(path, 'utf8').trim());
+    } catch {
+      // Not this cgroup version (or no cgroup at all) — try the next file.
+    }
+  }
+  return;
+}
+
+/**
+ * Memory figures for the host and, when one applies, the container limit.
+ * `constrainedMemory()` is the limit, but its no-limit value varies: Node reports
+ * 0 on a bare host and 2^64 − 1 in an unlimited cgroup, and Bun reports the full
+ * physical RAM, so only a value below `totalmem()` counts.
+ * `availableMemory()` is the headroom, but Bun's ignores the cgroup limit (it
+ * returns host free memory), so under a limit it is clamped to limit − usage.
+ */
+function readMemory() {
+  const totalBytes = os.totalmem();
+  const freeBytes = os.freemem();
+  const constrained = process.constrainedMemory();
+  const limitBytes = constrained > 0 && constrained < totalBytes ? constrained : undefined;
+  const available = process.availableMemory();
+  const availableBytes =
+    limitBytes === undefined
+      ? available
+      : Math.min(available, Math.max(0, limitBytes - (readCgroupUsage() ?? 0)));
+  return {
+    totalBytes,
+    freeBytes,
+    usedBytes: totalBytes - freeBytes,
+    availableBytes,
+    ...(limitBytes !== undefined && { limitBytes }),
+  };
+}
 
 /** The interface record shape, shared by the schema and the handler. */
 const InterfaceSchema = z
@@ -30,7 +76,7 @@ const InterfaceSchema = z
 export const checkSystemTool = tool('toolkit_check_system', {
   title: 'toolkit-mcp-server: check system',
   description:
-    "Report a facet of the server host's system state, read-only. what selects the facet: os (platform, release, architecture, hostname, uptime, Node version), cpu (model, core count, speed), memory (total/free/used bytes), load (1/5/15-minute load averages, all zero on Windows), or interfaces (non-internal network interfaces with their addresses and families). Exactly one facet object is populated per call, matching what; the others are absent. All values describe the host this server runs on, NOT the calling client — so this is useful only on a local or self-hosted deployment. interfaces and os disclose host topology and version details, which is why this tool is gated off by default.",
+    "Report a facet of the server host's system state, read-only. what selects the facet: os (platform, release, architecture, hostname, uptime, Node version), cpu (model, core count, speed), memory (available headroom and any container limit, plus the raw OS total/free/used bytes), load (1/5/15-minute load averages, all zero on Windows), or interfaces (non-internal network interfaces with their addresses and families). Exactly one facet object is populated per call, matching what; the others are absent. All values describe the host this server runs on, NOT the calling client — so this is useful only on a local or self-hosted deployment. interfaces and os disclose host topology and version details, which is why this tool is gated off by default.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: false },
   input: z.object({
     what: z
@@ -63,9 +109,32 @@ export const checkSystemTool = tool('toolkit_check_system', {
       .describe('CPU facts. Present only for what="cpu".'),
     memory: z
       .object({
-        totalBytes: z.number().describe('Total physical memory in bytes.'),
-        freeBytes: z.number().describe('Free physical memory in bytes.'),
-        usedBytes: z.number().describe('Used physical memory in bytes (total − free).'),
+        totalBytes: z
+          .number()
+          .describe(
+            "Total physical memory in bytes, as the OS reports it — the host's RAM even inside a container.",
+          ),
+        freeBytes: z
+          .number()
+          .describe(
+            'Free physical memory in bytes, the raw OS figure. It excludes reclaimable cache (on macOS, inactive and purgeable pages), so it can read near zero on a healthy host.',
+          ),
+        usedBytes: z
+          .number()
+          .describe(
+            'totalBytes − freeBytes, the raw OS figure. Counts reclaimable cache as used, so it overstates real pressure; availableBytes is the headroom.',
+          ),
+        availableBytes: z
+          .number()
+          .describe(
+            'Memory still available to this server process for new allocations, in bytes — the headroom figure. Bounded by the container limit minus current usage when limitBytes is present.',
+          ),
+        limitBytes: z
+          .number()
+          .optional()
+          .describe(
+            'The container (cgroup) memory limit on this process, in bytes. Absent when no limit below the host RAM applies.',
+          ),
       })
       .optional()
       .describe('Memory facts. Present only for what="memory".'),
@@ -110,14 +179,8 @@ export const checkSystemTool = tool('toolkit_check_system', {
           },
         };
       }
-      case 'memory': {
-        const total = os.totalmem();
-        const free = os.freemem();
-        return {
-          what: 'memory' as const,
-          memory: { totalBytes: total, freeBytes: free, usedBytes: total - free },
-        };
-      }
+      case 'memory':
+        return { what: 'memory' as const, memory: readMemory() };
       case 'load': {
         const [avg1 = 0, avg5 = 0, avg15 = 0] = os.loadavg();
         return { what: 'load' as const, load: { avg1, avg5, avg15 } };
@@ -157,8 +220,13 @@ export const checkSystemTool = tool('toolkit_check_system', {
     if (result.memory) {
       const m = result.memory;
       const gb = (n: number) => (n / 1024 ** 3).toFixed(2);
+      const limit =
+        m.limitBytes !== undefined
+          ? `container limit ${gb(m.limitBytes)} GiB (limitBytes ${m.limitBytes})`
+          : 'no container memory limit';
       lines.push(
-        `**Memory:** ${gb(m.usedBytes)} / ${gb(m.totalBytes)} GiB used (${gb(m.freeBytes)} GiB free) — totalBytes ${m.totalBytes}, freeBytes ${m.freeBytes}, usedBytes ${m.usedBytes}`,
+        `**Memory available:** ${gb(m.availableBytes)} GiB (availableBytes ${m.availableBytes}) — ${limit}`,
+        `**OS memory (raw):** ${gb(m.usedBytes)} / ${gb(m.totalBytes)} GiB used (${gb(m.freeBytes)} GiB free) — totalBytes ${m.totalBytes}, freeBytes ${m.freeBytes}, usedBytes ${m.usedBytes}`,
       );
     }
     if (result.load) {
