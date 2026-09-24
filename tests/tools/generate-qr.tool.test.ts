@@ -1,12 +1,20 @@
 /**
  * @fileoverview Tests for toolkit_generate_qr — the three output formats, PNG
  * byte validity, version reflecting data density, the PNG image content block,
- * and the rendered-raster pixel budget.
+ * the rendered-raster pixel budget, the escape-free terminal grid read back
+ * module by module, svg sizing by scale, and byte-counted capacity errors.
  * @module tests/tools/generate-qr.tool.test
  */
 
+import { createHash } from 'node:crypto';
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getContentBlocks } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createMockContext,
+  getContentBlocks,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
+import QRCode from 'qrcode';
 import { describe, expect, it } from 'vitest';
 import {
   generateQrTool,
@@ -226,5 +234,208 @@ describe('toolkit_generate_qr', () => {
     expect(pngText).toContain('version 3');
     expect(pngText).toContain('123 bytes');
     expect(pngText).not.toContain('QUJD'); // the payload rides the image block, not the text
+  });
+
+  it('renders the same PNG bytes for a fixed input', async () => {
+    const result = await run({ data: 'abc', format: 'png_base64' });
+    expect(createHash('sha256').update(result.content, 'base64').digest('hex')).toBe(
+      PNG_ABC_SHA256,
+    );
+    expect(result).toMatchObject({ version: 1, byteLength: PNG_ABC_BYTES, mimeType: 'image/png' });
+  });
+
+  it('sizes the SVG viewBox in modules, quiet zone included', async () => {
+    // "abc" is version 1 (21 modules); the default margin adds 4 on each side.
+    const result = await run({ data: 'abc', format: 'svg' });
+    expect(result.content).toContain('viewBox="0 0 29 29"');
+  });
+});
+
+/** Pinned PNG for `{ data: 'abc', format: 'png_base64' }` at the defaults. */
+const PNG_ABC_SHA256 = 'ddada71d53a7f9a2c72f2d3b4fc78bc0cbc275d463e0150d12aade925dacff37';
+const PNG_ABC_BYTES = 749;
+
+/** Every text block of a contract result, joined. */
+const textOf = (content: { type: string; text?: string }[]) =>
+  content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+
+/**
+ * Read a terminal grid back into module rows: each character is a top and a
+ * bottom half, and a drawn half (block ink) is a light module. Returns
+ * booleans where `true` is dark, matching `QRCode.create().modules`.
+ */
+const gridToModules = (grid: string): boolean[][] => {
+  const halves: Record<string, [boolean, boolean]> = {
+    '█': [false, false],
+    '▀': [false, true],
+    '▄': [true, false],
+    ' ': [true, true],
+  };
+  const rows: boolean[][] = [];
+  for (const line of grid.split('\n')) {
+    const top: boolean[] = [];
+    const bottom: boolean[] = [];
+    for (const char of line) {
+      const pair = halves[char];
+      if (!pair) throw new Error(`unexpected grid character ${JSON.stringify(char)}`);
+      top.push(pair[0]);
+      bottom.push(pair[1]);
+    }
+    rows.push(top, bottom);
+  }
+  return rows;
+};
+
+/** The expected module grid: the symbol inside a light quiet zone of `margin` modules. */
+const paddedModules = (
+  data: string,
+  errorCorrectionLevel: 'L' | 'M' | 'Q' | 'H',
+  margin: number,
+) => {
+  const { modules } = QRCode.create(data, { errorCorrectionLevel });
+  const edge = modules.size + 2 * margin;
+  return Array.from({ length: edge }, (_, y) =>
+    Array.from({ length: edge }, (_, x) => {
+      const row = y - margin;
+      const col = x - margin;
+      if (row < 0 || col < 0 || row >= modules.size || col >= modules.size) return false;
+      return Boolean(modules.data[row * modules.size + col]);
+    }),
+  );
+};
+
+describe('toolkit_generate_qr terminal output', () => {
+  it('carries no ANSI escape bytes on either surface', async () => {
+    const result = await runToolContract(generateQrTool, {
+      data: 'https://example.com',
+      format: 'terminal',
+    });
+    const structured = result.structuredContent as { content: string };
+    expect(structured.content).not.toContain('\x1b');
+    expect(textOf(result.content)).not.toContain('\x1b');
+  });
+
+  it('fences the grid in content[] so a Markdown client keeps its spacing', async () => {
+    const result = await runToolContract(generateQrTool, { data: 'abc', format: 'terminal' });
+    const grid = (result.structuredContent as { content: string }).content;
+    const text = textOf(result.content);
+    expect(text).toContain(`\n\`\`\`\n${grid}\n\`\`\``);
+  });
+
+  it('draws a dark module as a space and a light module as a block', async () => {
+    // "abc" at margin 4: character row 2 holds symbol rows 0 and 1. The finder
+    // pattern's top-left corner is dark over dark (a space); one column right
+    // it is dark over light (a lower-half block).
+    const result = await run({ data: 'abc', format: 'terminal' });
+    const lines = result.content.split('\n');
+    expect(lines[0]).toMatch(/^█+$/);
+    expect(lines[2]?.[4]).toBe(' ');
+    expect(lines[2]?.[5]).toBe('▄');
+  });
+
+  it.each([
+    ['a version-1 symbol at the default margin', 'abc', 'M', 4],
+    ['a version-10 symbol with an odd margin', 'x'.repeat(200), 'Q', 3],
+    ['a symbol with no quiet zone', 'hello', 'H', 0],
+    ['a symbol with a one-module quiet zone', 'hello', 'L', 1],
+  ] as const)(
+    'maps every character back to the module grid for %s',
+    async (_label, data, ec, margin) => {
+      const result = await run({ data, format: 'terminal', errorCorrection: ec, margin });
+      const expected = paddedModules(data, ec, margin);
+      const decoded = gridToModules(result.content);
+      expect(decoded[0]).toHaveLength(expected.length);
+      // An odd row count leaves a trailing half-row with no module; it renders as
+      // no ink, which reads back as dark.
+      expect(decoded.length).toBe(expected.length + (expected.length % 2));
+      expect(decoded.slice(0, expected.length)).toEqual(expected);
+      if (expected.length % 2) expect(decoded.at(-1)?.every(Boolean)).toBe(true);
+    },
+  );
+
+  it('honors margin as the quiet-zone width', async () => {
+    const narrow = await run({ data: 'abc', format: 'terminal', margin: 1 });
+    const wide = await run({ data: 'abc', format: 'terminal', margin: 6 });
+    expect(narrow.content.split('\n')[0]).toHaveLength(21 + 2);
+    expect(wide.content.split('\n')[0]).toHaveLength(21 + 12);
+  });
+});
+
+describe('toolkit_generate_qr svg scale', () => {
+  const widthOf = (svg: string) => /<svg[^>]*\swidth="(\d+)"/.exec(svg)?.[1];
+  const heightOf = (svg: string) => /<svg[^>]*\sheight="(\d+)"/.exec(svg)?.[1];
+
+  it('produces different markup for scale 1 and scale 20', async () => {
+    const small = await run({ data: 'https://example.com', format: 'svg', scale: 1 });
+    const large = await run({ data: 'https://example.com', format: 'svg', scale: 20 });
+    expect(small.content).not.toBe(large.content);
+  });
+
+  it.each([
+    [1, 4],
+    [20, 4],
+    [7, 0],
+    [32, 20],
+  ])(
+    'sets width and height to (modules + 2 × margin) × scale at scale %d, margin %d',
+    async (scale, margin) => {
+      const result = await run({ data: 'https://example.com', format: 'svg', scale, margin });
+      const edge = (result.version * 4 + 17 + 2 * margin) * scale;
+      expect(widthOf(result.content)).toBe(String(edge));
+      expect(heightOf(result.content)).toBe(String(edge));
+      expect(result.content).toContain(`viewBox="0 0 ${result.version * 4 + 17 + 2 * margin} `);
+    },
+  );
+
+  it('keeps svg outside the raster budget at the largest symbol and scale', async () => {
+    const result = await run({
+      data: 'x'.repeat(2953),
+      format: 'svg',
+      errorCorrection: 'L',
+      margin: 20,
+      scale: 32,
+    });
+    expect(widthOf(result.content)).toBe(String((177 + 40) * 32));
+  });
+});
+
+describe('toolkit_generate_qr summary text and byte counts', () => {
+  it('separates the png metadata from the next sentence', async () => {
+    const result = await runToolContract(generateQrTool, { data: 'abc', format: 'png_base64' });
+    expect(textOf(result.content)).toMatch(/bytes\)\. The PNG is attached/);
+  });
+
+  it('reports a multi-byte payload over capacity in UTF-8 bytes', async () => {
+    // 1000 check marks are 1000 UTF-16 code units — inside the schema cap — but
+    // 3000 UTF-8 bytes, past even level L's byte-mode capacity.
+    const error = await run({ data: '✓'.repeat(1000), errorCorrection: 'M' }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toMatchObject({ data: { reason: 'data_too_large' } });
+    expect((error as Error).message).toContain('3000 bytes');
+    expect((error as Error).message).not.toContain('1000');
+  });
+
+  it('puts the byte count and recovery hint on the wire for data_too_large', async () => {
+    const result = await runToolContract(generateQrTool, {
+      data: '✓'.repeat(1000),
+      errorCorrection: 'M',
+    });
+    const { error } = z
+      .object({
+        error: z.object({
+          code: z.number(),
+          message: z.string(),
+          data: z.object({ reason: z.string(), recovery: z.object({ hint: z.string() }) }),
+        }),
+      })
+      .parse(result.structuredContent);
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data.reason).toBe('data_too_large');
+    expect(error.message).toContain('3000 bytes');
+    expect(textOf(result.content)).toContain(error.data.recovery.hint);
   });
 });

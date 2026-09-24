@@ -7,7 +7,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import QRCode from 'qrcode';
+import { markdown } from '@cyanheads/mcp-ts-core/utils';
+import QRCode, { type BitMatrix, type QRCode as QrSymbol } from 'qrcode';
 
 /**
  * Ceiling on the rendered PNG's edge in pixels. Three caller-supplied inputs
@@ -22,9 +23,38 @@ export const QR_MAX_PNG_EDGE_PX = 2048;
 /** Modules per side for a QR symbol version (RFC-fixed: 21 at v1, +4 per version). */
 const modulesForVersion = (version: number): number => version * 4 + 17;
 
+/**
+ * Draw the symbol as Unicode half-blocks, two module rows per text line, with
+ * no escape sequences. Light modules — the quiet zone included — are ink and
+ * dark modules are blank, so the grid reads with correct polarity on a dark
+ * background without setting one. A trailing half-row past an odd edge is
+ * left blank.
+ */
+function renderTerminal(modules: BitMatrix, margin: number): string {
+  const edge = modules.size + 2 * margin;
+  const isLight = (x: number, y: number): boolean => {
+    if (y >= edge) return false;
+    const row = y - margin;
+    const col = x - margin;
+    if (row < 0 || col < 0 || row >= modules.size || col >= modules.size) return true;
+    return !modules.data[row * modules.size + col];
+  };
+  const lines: string[] = [];
+  for (let y = 0; y < edge; y += 2) {
+    let line = '';
+    for (let x = 0; x < edge; x++) {
+      const top = isLight(x, y);
+      const bottom = isLight(x, y + 1);
+      line += top ? (bottom ? '█' : '▀') : bottom ? '▄' : ' ';
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
 export const generateQrTool = tool('toolkit_generate_qr', {
   title: 'toolkit-mcp-server: generate QR code',
-  description: `Encode text or a URL into a QR code. data is the content to encode (a link, a generated identifier such as toolkit_generate_id's ids[0], or any string). format selects the output: svg returns inline SVG markup, png_base64 returns base64-encoded PNG bytes (with mimeType and byteLength), and terminal returns a block of Unicode block characters renderable in a monospace terminal. errorCorrection (L/M/Q/H) trades data capacity for damage tolerance, margin sets the quiet-zone width, and scale sets pixels per module for raster output. The returned version (1–40) reflects how dense the encoded data is. png_base64 renders (modules + 2 × margin) × scale pixels per side and rejects anything past ${QR_MAX_PNG_EDGE_PX} px with a typed raster_too_large error, so a dense symbol needs a lower scale; svg carries no such limit.`,
+  description: `Encode text or a URL into a QR code. data is the content to encode (a link, a generated identifier such as toolkit_generate_id's ids[0], or any string). format selects the output: svg returns inline SVG markup sized in pixels, png_base64 returns base64-encoded PNG bytes (with mimeType and byteLength), and terminal returns plain Unicode half-block characters (no escape codes) for a monospace display, drawn for a dark background: light modules, quiet zone included, are blocks and dark modules are spaces. errorCorrection (L/M/Q/H) trades data capacity for damage tolerance, margin sets the quiet-zone width in modules, and scale sets pixels per module for svg and png_base64, so both are (modules + 2 × margin) × scale pixels per side. The returned version (1–40) reflects how dense the encoded data is. png_base64 rejects an image past ${QR_MAX_PNG_EDGE_PX} px per side with a typed raster_too_large error, so a dense symbol needs a lower scale; svg is vector markup and carries no such limit.`,
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
     data: z
@@ -32,13 +62,13 @@ export const generateQrTool = tool('toolkit_generate_qr', {
       .min(1)
       .max(2953)
       .describe(
-        'The text or URL to encode. 2953 is the absolute ceiling (QR version 40, level L, byte mode); usable capacity drops at higher errorCorrection levels, so over-capacity data is rejected with a typed data_too_large error rather than a generic failure.',
+        'The text or URL to encode, stored as UTF-8. Capacity is counted in bytes: 2953 UTF-8 bytes is the absolute ceiling (QR version 40, level L, byte mode). The 2953-character limit here is only an upper bound, since a non-ASCII character takes 2–4 bytes. Usable capacity drops at higher errorCorrection levels, so over-capacity data is rejected with a typed data_too_large error rather than a generic failure.',
       ),
     format: z
       .enum(['svg', 'png_base64', 'terminal'])
       .default('svg')
       .describe(
-        'Output format: svg markup, png_base64 (raster bytes), or a terminal-renderable string.',
+        'Output format: svg markup, png_base64 (raster bytes), or terminal (plain Unicode half-blocks, drawn for a dark background).',
       ),
     errorCorrection: z
       .enum(['L', 'M', 'Q', 'H'])
@@ -60,7 +90,7 @@ export const generateQrTool = tool('toolkit_generate_qr', {
       .max(32)
       .default(4)
       .describe(
-        `Pixels per module for raster (png_base64) output. Ignored for terminal. png_base64 also bounds the whole image at ${QR_MAX_PNG_EDGE_PX} px per side, so a dense symbol or a wide margin admits a lower scale than 32.`,
+        `Pixels per module for svg (its width and height) and png_base64. Ignored for terminal. png_base64 also bounds the whole image at ${QR_MAX_PNG_EDGE_PX} px per side, so a dense symbol or a wide margin admits a lower scale than 32 there.`,
       ),
   }),
   /**
@@ -75,7 +105,7 @@ export const generateQrTool = tool('toolkit_generate_qr', {
     content: z
       .string()
       .describe(
-        'The QR artifact: SVG markup, a terminal-renderable string, or base64 PNG bytes for png_base64.',
+        'The QR artifact: SVG markup, the terminal half-block grid (newline-separated rows), or base64 PNG bytes for png_base64.',
       ),
     mimeType: z
       .enum(['image/svg+xml', 'image/png'])
@@ -113,46 +143,46 @@ export const generateQrTool = tool('toolkit_generate_qr', {
     // rejects over-capacity data: the schema's 2953 cap is the level-L/byte-mode
     // ceiling, so a payload valid for the schema can still exceed capacity at
     // M/Q/H. Translate that library error into the typed contract reason.
-    let version: number;
+    let symbol: QrSymbol;
     try {
-      version = QRCode.create(input.data, { errorCorrectionLevel }).version;
+      symbol = QRCode.create(input.data, { errorCorrectionLevel });
     } catch (err) {
       if (err instanceof Error && /too big/i.test(err.message)) {
+        // Capacity is a byte count (the library encodes UTF-8), so report bytes,
+        // not UTF-16 code units: one "✓" is a single code unit but three bytes.
         throw ctx.fail(
           'data_too_large',
-          `data is ${input.data.length} characters, which exceeds the QR capacity at error-correction level ${input.errorCorrection}.`,
+          `data is ${Buffer.byteLength(input.data, 'utf8')} bytes (UTF-8), which exceeds the QR capacity at error-correction level ${input.errorCorrection}.`,
           { ...ctx.recoveryFor('data_too_large') },
         );
       }
       throw err;
     }
+    const { version } = symbol;
+    const modules = modulesForVersion(version);
+    const edgePx = (modules + 2 * input.margin) * input.scale;
     ctx.log.info('Generated QR', { format: input.format, version });
 
     if (input.format === 'svg') {
+      // width/height are presentational attributes on vector markup, so they
+      // honor scale without rasterizing anything — no pixel budget applies.
       const content = await QRCode.toString(input.data, {
         type: 'svg',
         errorCorrectionLevel,
         margin: input.margin,
-        scale: input.scale,
+        width: edgePx,
       });
       return { format: 'svg' as const, content, mimeType: 'image/svg+xml' as const, version };
     }
 
     if (input.format === 'terminal') {
-      const content = await QRCode.toString(input.data, {
-        type: 'terminal',
-        errorCorrectionLevel,
-        margin: input.margin,
-        small: true,
-      });
+      const content = renderTerminal(symbol.modules, input.margin);
       return { format: 'terminal' as const, content, version };
     }
 
     // png_base64 is the only format that rasterizes, so it is the only one that
     // needs a budget: svg is vector markup and terminal is a character grid.
     // The check runs before toBuffer(), so an over-budget request costs nothing.
-    const modules = modulesForVersion(version);
-    const edgePx = (modules + 2 * input.margin) * input.scale;
     if (edgePx > QR_MAX_PNG_EDGE_PX) {
       const maxScale = Math.floor(QR_MAX_PNG_EDGE_PX / (modules + 2 * input.margin));
       throw ctx.fail(
@@ -199,13 +229,14 @@ export const generateQrTool = tool('toolkit_generate_qr', {
       .join(', ');
     // svg/terminal embed the renderable artifact; png is summarized, since its
     // bytes already reach content[] as an image block and structuredContent.content
-    // as base64 — a third copy in the markdown twin buys nothing.
+    // as base64 — a third copy in the markdown twin buys nothing. The terminal
+    // grid is fenced so a Markdown client keeps the spaces its dark modules are.
     const body =
       result.format === 'png_base64'
-        ? 'The PNG is attached as an image block.'
+        ? ' The PNG is attached as an image block.'
         : result.format === 'svg'
           ? `\n\n\`\`\`svg\n${result.content}\n\`\`\``
-          : `\n\n${result.content}`;
+          : `\n\n${markdown().codeBlock(result.content).build().trimEnd()}`;
     return [{ type: 'text', text: `QR code (${meta}).${body}` }];
   },
 });
