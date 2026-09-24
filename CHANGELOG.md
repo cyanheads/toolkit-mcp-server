@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.3.0](changelog/2.3.x/2.3.0.md) — 2026-09-23 · ⚠️ Breaking
+
+toolkit_encode_value decode is now byte-exact via outputEncoding, toolkit_hash_value adds sha384/base64/SRI digests, toolkit_generate_qr terminal output drops ANSI escapes, and toolkit_generate_id randomizes same-millisecond id steps.
+
 ## [2.2.4](changelog/2.2.x/2.2.4.md) — 2026-09-19
 
 Session mode is now declared in source (createApp({ sessionMode: 'stateless' })), five tools accept common parameter-name aliases, and devcheck gains a README version-badge check and a CodeQL workflow.
