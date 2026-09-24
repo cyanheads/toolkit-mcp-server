@@ -322,6 +322,9 @@ export class NetDiagService {
     ctx: Context,
   ): Promise<NetDiagResult> {
     return new Promise<NetDiagResult>((resolve, reject) => {
+      // A cancellation during DNS resolution has already fired its abort event,
+      // so the listener below would never run for it.
+      ctx.signal.throwIfAborted();
       const startedAt = performance.now();
       const socket = connect({ host: resolvedIp, port });
       let settled = false;

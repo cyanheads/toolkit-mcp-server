@@ -239,6 +239,7 @@ describe('NetDiagService probes', () => {
     initNetDiagService();
     execFileMock.mockReset();
     lookupMock.mockReset();
+    connectMock.mockReset();
   });
 
   afterEach(() => {
@@ -690,6 +691,23 @@ Ping-Statistik für 8.8.8.8:
       controller.abort(reason);
       expect(await pending).toBe(reason);
       expect(socket.destroy).toHaveBeenCalled();
+    });
+
+    it('rejects without connecting when the caller cancelled before the probe started', async () => {
+      // A cancellation that lands during DNS resolution has already fired its
+      // abort event by the time the probe subscribes, so the listener never runs.
+      socketEmits('connect');
+      const controller = new AbortController();
+      const reason = new Error('client cancelled');
+      controller.abort(reason);
+      const error = await getNetDiagService()
+        .run(
+          { mode: 'connectivity', target: '8.8.8.8', port: 443, count: 3, timeoutMs: 2000 },
+          createMockContext({ errors: checkNetworkTool.errors, signal: controller.signal }),
+        )
+        .catch((e: unknown) => e);
+      expect(error).toBe(reason);
+      expect(connectMock).not.toHaveBeenCalled();
     });
 
     it('settles on the first event only', async () => {
