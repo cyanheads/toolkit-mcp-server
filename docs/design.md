@@ -17,7 +17,7 @@ This doc formalizes `docs/idea.md` into a buildable spec. The tool names are fix
 | `toolkit_generate_qr` | Encode text/URL into a QR code as SVG markup, base64 PNG bytes, or a terminal-renderable string. | `true` | `false` | `data`, `format` (`svg`\|`png_base64`\|`terminal`), `errorCorrection`, `margin`, `scale` | `{ format, content, mimeType?, byteLength?, version }` |
 | `toolkit_encode_value` | Encode or decode a value across base64 / base64url / hex / URL. | `true` | `false` | `operation` (`encode`\|`decode`), `encoding`, `value`, `outputEncoding` (`utf8`\|`hex`\|`base64` — decode only; omitted means `utf8`) | `{ encoding, operation, outputEncoding?, result }` |
 | `toolkit_geolocate_ip` | Resolve a public IP (or hostname) to geographic and network metadata via an external geo API. | `true` | `true` | `target` (IPv4/IPv6/hostname) | `{ target, resolvedIp, country, countryCode, region, city, latitude, longitude, asn, org, timezone, proxy, hosting, mobile, source }` |
-| `toolkit_check_network` | **Gated.** Network diagnostics — ping, traceroute, TCP connectivity, or host egress-IP detection. | `true` | `true` | `mode` (`ping`\|`traceroute`\|`connectivity`\|`public_ip`), `target` (required for all modes except `public_ip`), `port` (connectivity only), `count`, `timeoutMs` | `{ mode, target?, reachable?, hops?, rttMs?, publicIp? }` |
+| `toolkit_check_network` | **Gated.** Network diagnostics — ping, traceroute, TCP connectivity, or host egress-IP detection. | `true` | `true` | `mode` (`ping`\|`traceroute`\|`connectivity`\|`public_ip`), `target` (required for all modes except `public_ip`), `port` (connectivity only), `count`, `timeoutMs` | `{ mode, target?, reachable?, outcome?, rttMs?, sent?, received?, packetLossPercent?, hops?, publicIp? }` |
 | `toolkit_check_system` | **Gated.** Host system facts — OS, CPU, memory, load average, or network interfaces. | `true` | `false` | `what` (`os`\|`cpu`\|`memory`\|`load`\|`interfaces`) | `{ what, ...facetFields }` |
 
 ¹ `toolkit_generate_id` is `readOnlyHint: true` — minting draws from the CSPRNG and returns it, modifying nothing — paired with `idempotentHint: false`, since each call produces fresh non-reproducible entropy (the whole point) and must not be cached or deduplicated. It performs no external I/O, so `openWorldHint: false`.
@@ -63,8 +63,8 @@ Primary agent workflows: "give me 5 ULIDs for these records", "turn this URL int
 - QR generation emits SVG (text, sized `(modules + 2 × margin) × scale` px), base64-encoded PNG, or a terminal string of plain Unicode half-blocks, with configurable error-correction level, quiet-zone margin, and module scale.
 - Encoding covers base64, base64url, hex, URL — both directions. Decode is byte-preserving: `outputEncoding` returns the recovered bytes as UTF-8 text (default, fatal on invalid UTF-8), hex, or base64, so binary payloads and digests transcode without loss. Whitespace in hex/base64/base64url input is ignored.
 - Geolocation accepts an IP **or** a hostname, resolves to country/region/city, lat/lon, ASN/org, timezone, and reports its `source` provider. It is cached and rate-limited.
-- `toolkit_check_network` supports `ping`, `traceroute`, `connectivity` (TCP reachability — host via `target`, port via separate `port` param, not inline `host:port` syntax), and `public_ip` (host egress IP — `target` is absent/ignored for this mode). Private/reserved/loopback/link-local targets are **rejected** unless `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`.
-- `toolkit_check_system` reports host OS, CPU, memory, load, or interfaces.
+- `toolkit_check_network` supports `ping`, `traceroute`, `connectivity` (TCP reachability — host via `target`, port via separate `port` param, not inline `host:port` syntax), and `public_ip` (host egress IP — `target` is absent/ignored for this mode). Private/reserved/loopback/link-local targets are **rejected** unless `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`. `ping` reports `sent`/`received`/`packetLossPercent` from the binary's summary line; `connectivity` reports an `outcome` (`open` | `refused` | `timeout` | `unreachable`) and, when open, the connect time as `rttMs`. On macOS/BSD an IPv6 address runs `ping6`/`traceroute6`, since their `ping`/`traceroute` reject IPv6; Linux and Windows use one binary for both families.
+- `toolkit_check_system` reports host OS, CPU, memory, load, or interfaces. Memory carries `availableBytes` (headroom for new allocations) and, inside a container, `limitBytes`, alongside the raw OS `totalBytes`/`freeBytes`/`usedBytes`.
 
 **Non-functional**
 
@@ -131,7 +131,11 @@ type CheckNetworkResult = {
   mode: 'ping' | 'traceroute' | 'connectivity' | 'public_ip';
   target?: string;           // absent for public_ip
   reachable?: boolean;       // ping + connectivity: false is a valid result, not an error
-  rttMs?: number;            // ping: round-trip time in milliseconds
+  outcome?: 'open' | 'refused' | 'timeout' | 'unreachable';  // connectivity
+  rttMs?: number;            // ping: average echo time; connectivity: connect time, only when open
+  sent?: number;             // ping, reachable or not: echo requests transmitted
+  received?: number;         // ping: echo replies received
+  packetLossPercent?: number; // ping: 0–100, one decimal, computed from sent/received
   hops?: Array<{ hop: number; address: string; rttMs?: number }>;  // traceroute
   publicIp?: string;         // public_ip: the host's egress IP as seen by the external probe
 };
@@ -183,7 +187,8 @@ Everything else needs **no service** — pure functions over Node builtins, invo
 | Concern | Decision |
 |---|---|
 | Retry boundary | Service method wraps DNS-resolve + fetch + parse via `withRetry` from `/utils`. |
-| Backoff | 1–2 s base (default calibrated to the keyless ip-api tier, ~45 req/min; `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` tunes this for higher-tier providers). |
+| Backoff | 1–2 s base between retries of a failed lookup. |
+| Rate limit | A per-minute budget (`TOOLKIT_GEO_RATE_LIMIT_PER_MIN`, default 45 to match the keyless ip-api tier); a lookup past it is rejected with a retryable rate-limit error rather than delayed. |
 | HTTP check | `fetchWithTimeout` → non-OK becomes `ServiceUnavailable`. |
 | Parse classification | Detect provider error envelopes (`status: "fail"`) and throw the right code, not `SerializationError`. |
 | Cache | In-memory TTL (default ~1 h) keyed by resolved IP — geolocation is stable, this absorbs repeat lookups and protects the rate budget. |
@@ -204,7 +209,7 @@ Server-specific env vars live in `src/config/server-config.ts` as a lazy-parsed 
 | `TOOLKIT_GEO_API_KEY` | No | — | API key, **if** the configured endpoint needs one. Absent → the keyless ip-api tier, rate-limited but fully functional. |
 | `TOOLKIT_GEO_BASE_URL` | No | `http://ip-api.com` | Base URL for an **ip-api-compatible** endpoint — the request path and response shape are always ip-api's. Override to point at an ip-api pro endpoint or a self-hosted compatible one. The default is plaintext HTTP; ip-api's HTTPS endpoint requires a paid key. |
 | `TOOLKIT_GEO_CACHE_TTL_SECONDS` | No | `3600` | GeoService cache TTL. |
-| `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | No | `45` | Max geo-API requests per minute before the backoff slows. Default matches ip-api free tier (~45 req/min). Raise when using a keyed or higher-tier provider. |
+| `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | No | `45` | Max geo-API requests per minute; excess requests are rejected with a retryable rate-limit error. Default matches the ip-api free tier (45 req/min). Raise when using a keyed or higher-tier provider. |
 
 **One provider protocol.** There is no provider-selector variable: `GeoService` speaks ip-api and reports `source: "ip-api"` from a fixed literal, so provenance cannot be misstated by configuration. A second provider would arrive as an adapter layer with its own request/response mapping, and could reintroduce a constrained choice then.
 
@@ -314,9 +319,11 @@ Typed contracts (`errors: [{ reason, code, when, recovery }]`) where a domain fa
 | `toolkit_geolocate_ip` | `unresolvable_host` | `ValidationError` | A hostname target failed DNS resolution. | Hostname didn't resolve. Verify it, or pass an IP address directly. |
 | `toolkit_geolocate_ip` | `private_target` | `ValidationError` | The target resolves to a private/reserved IP with no public geolocation. | Private/reserved addresses have no public geolocation. Pass a public IP address. |
 | `toolkit_check_network` | `private_target_blocked` | `ValidationError` | The target is private/reserved/loopback/link-local and TOOLKIT_ALLOW_PRIVATE_NETWORK is off. | This target is a private/reserved address. Set TOOLKIT_ALLOW_PRIVATE_NETWORK=true to permit local-network diagnostics. |
-| `toolkit_check_network` | `unreachable` | `ServiceUnavailable` | A hostname target could not be resolved, or traceroute could not run in this environment. | Verify the host resolves and the diagnostic binary is available, or try mode connectivity which uses raw TCP. |
+| `toolkit_check_network` | `unreachable` | `ServiceUnavailable` | A hostname target could not be resolved, or the ping/traceroute binary could not run in this environment or exited without a result. | Verify the host resolves and the diagnostic binary is available, or try mode connectivity with a port, which uses raw TCP. |
+| `toolkit_check_network` | `missing_target` | `ValidationError` | mode is ping, traceroute, or connectivity and no target was supplied. | Pass target as an IPv4/IPv6 address or hostname, or use mode public_ip, which takes no target. |
+| `toolkit_check_network` | `missing_port` | `ValidationError` | mode is connectivity and no port was supplied. | Pass port as a separate number (e.g. 443) — connectivity needs one to connect to. |
 
-A host that is simply down is not an error: ping and connectivity report it as `reachable: false`, a valid result the agent acts on. The `unreachable` reason covers only the cases where no diagnosis could run at all.
+A host that is simply down is not an error: ping and connectivity report it as `reachable: false`, a valid result the agent acts on. The `unreachable` reason covers only the cases where no diagnosis could run at all. For ping, the dividing line is the packet-loss summary: a run that printed one is a result whatever its exit status, and `reachable` is whether any reply came back (Linux iputils exits 1 on partial loss too), while a binary that never spawned (the error names the binary and its errno, e.g. `ENOENT`) or exited without a summary it could read (the error says the output could not be interpreted and carries its stderr) throws `unreachable`.
 
 `toolkit_generate_id` and `toolkit_check_system` have no domain-specific failure contract — bad input is rejected at the schema as `InvalidParams`, and there's no partial-success or multi-step finalize. `generate_qr`'s two reasons both cover limits the schema cannot express on its own: `data` is capped at `z.string().max(2953)`, a character count that only bounds the real limit — capacity is 2953 UTF-8 bytes at version 40, level L, lower at M/Q/H — and the rendered pixel count is a product of three inputs, so each is checked in the handler and surfaced as a typed reason rather than a raw library failure. `hash_value`'s `expected_without_compare` and `encode_value`'s `output_encoding_not_applicable` reject a contradiction between two supplied fields rather than ignoring one of them, which is also why neither tool gives the discriminating field (`operation`, `outputEncoding`) a schema default: the handler has to see whether it was sent.
 
@@ -336,7 +343,8 @@ A host that is simply down is not an error: ping and connectivity report it as `
 
 - **Geolocation accuracy is provider-bounded.** Keyless ip-api-class data is coarse (city-level at best, often just country/region) and the free tier is rate-limited (~45 req/min); the cache absorbs repeats but a burst of distinct IPs can hit the ceiling → `ServiceUnavailable`. A keyed provider raises both.
 - **Geolocation is best-effort, not authoritative.** VPNs, proxies, mobile carrier-grade NAT, and anycast all defeat IP→location. Treat results as a hint.
-- **Network diagnostics depend on host environment.** ICMP ping may be blocked by the OS or unavailable in a container without `NET_RAW`; traceroute hop visibility varies; `connectivity` (raw TCP) is the most portable mode. The hosted profile disables all of this anyway.
+- **Network diagnostics depend on host environment.** ICMP ping may be blocked by the OS or unavailable in a container without `NET_RAW`; traceroute hop visibility varies; `connectivity` (raw TCP) is the most portable mode. The published Docker image ships neither `ping` nor `traceroute`, so those modes throw `unreachable` there. macOS `ping6` has no deadline flag: it sends one echo a second and then waits a fixed 10 s for the last reply, so an IPv6 ping that gets no answer takes about `count` + 10 seconds, whatever `timeoutMs` says. Ping reads its packet-loss summary in English only; a localized Windows prints it in its own language, so a run with no replies there throws `unreachable` (its output could not be interpreted) rather than reporting the host down, and a responding run reports `reachable: true` without the packet counts or RTT. The hosted profile disables all of this anyway.
+- **Container memory depends on the runtime.** Under a cgroup limit, `os.totalmem()`/`os.freemem()` still read the host. Node's `process.availableMemory()` respects the limit but Bun's does not — Bun returns host free memory, the same figure as `os.freemem()` — so `availableBytes` is clamped to the limit minus the cgroup's current usage (`memory.current`, or `memory.usage_in_bytes` on cgroup v1). That usage includes reclaimable page cache, so under a limit the figure is conservative. With no limit, Bun's `availableBytes` equals `freeBytes`; the headroom figure that counts reclaimable pages comes from Node. The usage file is read at `/sys/fs/cgroup`, which inside a container is the container's own cgroup; a process limited by its own cgroup on a bare cgroup-v1 host would read the host-wide figure there and report zero headroom.
 - **Workers build is a reduced surface** — no `check_network`/`check_system` (no raw sockets / `os` in a V8 isolate). Documented, not a bug.
 - **System info reflects the server host, not the client** — only meaningful on a local/self-hosted deployment, which is why it's gated off by default.
 - **md5/sha1 are cryptographically broken** for signatures/passwords. Retained strictly for checksum/compatibility; the description says so.

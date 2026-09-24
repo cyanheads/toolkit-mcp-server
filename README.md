@@ -105,7 +105,9 @@ A standalone developer-utilities server — the five always-on tools need no ups
 
 - **Gated** — registered only when `TOOLKIT_ENABLE_NET_DIAGNOSTICS=true`; absent from `tools/list` otherwise
 - `mode`: `ping` (ICMP round-trip), `traceroute` (hop path to the target), `connectivity` (raw TCP connect to `target` on `port`), or `public_ip` (the host's own egress IP)
-- A host that does not respond is reported as `reachable: false` — a valid result, not an error
+- A host that does not respond is reported as `reachable: false` — a valid result, not an error. A ping or traceroute binary that is missing, or that exits without a result, is an `unreachable` error naming the binary instead
+- `ping` reports `sent`, `received`, and `packetLossPercent` alongside the average `rttMs`; on macOS/BSD an IPv6 target runs `ping6`/`traceroute6`
+- `connectivity` reports an `outcome` — `open`, `refused` (nothing listening), `timeout` (traffic dropped), or `unreachable` (no route) — and the connect time as `rttMs` when open
 - Diagnoses the **server's** own network, so it is useful on a local or self-hosted deployment; reaching a private/reserved/internal target additionally requires `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`, which keeps the cloud-metadata endpoint blocked by default
 
 ---
@@ -115,6 +117,7 @@ A standalone developer-utilities server — the five always-on tools need no ups
 - **Gated** — registered only when `TOOLKIT_ENABLE_SYSTEM_INFO=true`; absent from `tools/list` otherwise
 - `what`: `os`, `cpu`, `memory`, `load`, or `interfaces`
 - Exactly one facet object is populated per call, matching `what`
+- `memory` reports `availableBytes` (headroom for new allocations) and, when the server runs under a container memory limit, `limitBytes`; `totalBytes`, `freeBytes`, and `usedBytes` are the raw OS figures, which count reclaimable cache as used and read the host's RAM inside a container
 - Describes the host this server runs on, **not** the calling client — meaningful on a local or self-hosted deployment; gated off by default because `os` and `interfaces` disclose host topology and version details
 
 ## Features
