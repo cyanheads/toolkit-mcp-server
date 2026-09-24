@@ -49,7 +49,9 @@ export const checkNetworkTool = tool('toolkit_check_network', {
       .min(100)
       .max(30000)
       .default(3000)
-      .describe('Per-probe deadline in milliseconds for ping and connectivity.'),
+      .describe(
+        'Per-probe deadline in milliseconds for ping and connectivity. On macOS/BSD an IPv6 ping runs ping6, which has no deadline flag and ignores it.',
+      ),
   }),
   /**
    * `target` takes an IP or a hostname, so a caller reaches for the narrower
@@ -84,16 +86,20 @@ export const checkNetworkTool = tool('toolkit_check_network', {
     sent: z
       .number()
       .optional()
-      .describe('Echo requests ping transmitted. Present for ping, reachable or not.'),
+      .describe(
+        'Echo requests ping transmitted. Present for ping, reachable or not, whenever its summary line could be read.',
+      ),
     received: z
       .number()
       .optional()
-      .describe('Echo replies ping received. Present for ping, reachable or not.'),
+      .describe(
+        'Echo replies ping received. Present for ping, reachable or not, whenever its summary line could be read.',
+      ),
     packetLossPercent: z
       .number()
       .optional()
       .describe(
-        'Share of echo requests that got no reply, 0–100, one decimal. Present for ping; 100 means no reply at all.',
+        'Share of echo requests that got no reply, 0–100, one decimal. Present for ping whenever its summary line could be read; 100 means no reply at all.',
       ),
     hops: z
       .array(
