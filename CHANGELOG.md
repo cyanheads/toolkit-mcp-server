@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.3.2](changelog/2.3.x/2.3.2.md) — 2026-10-07
+
+Framework @cyanheads/mcp-ts-core ^0.13.6 → ^0.13.13: tool error results end with their request id, error data no longer carries server stack traces or request context, and the Docker image installs its dependencies on the build platform.
+
 ## [2.3.1](changelog/2.3.x/2.3.1.md) — 2026-09-23
 
 toolkit_check_network ping now throws unreachable on a genuine diagnostic failure instead of reporting reachable:false, connectivity gains a typed outcome, and toolkit_check_system memory reports container-aware availableBytes/limitBytes.
