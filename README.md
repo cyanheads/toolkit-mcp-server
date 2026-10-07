@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,96 +29,73 @@
 
 ## Overview
 
-A standalone developer-utilities server — the five always-on tools need no upstream API: generate identifiers, QR codes, and cryptographic digests, encode and decode values, and geolocate a public IP or hostname. Two more tools report diagnostics about the server's own host, gated off by default. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Developer utilities that run in-process: generate identifiers, QR codes, and cryptographic digests, and encode or decode values. Geolocating a public IP or hostname is the one outbound call, and two host-diagnostic tools stay off unless enabled. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
 ### Tools
 
 | Tool | Description |
 |:---|:---|
-| `toolkit_hash_value` | Generate a cryptographic digest (sha256/sha384/sha512/sha1/md5) as hex, base64, or SRI, or constant-time-compare a value against an expected digest. |
-| `toolkit_generate_id` | Mint cryptographically-random identifiers — UUIDv4, UUIDv7, or ULID — singly or in batches up to 1000. |
-| `toolkit_generate_qr` | Encode text or a URL into a QR code as SVG markup, base64 PNG, or a terminal-renderable string. |
-| `toolkit_encode_value` | Encode or decode a value across base64, base64url, hex, or URL percent-encoding, in either direction. |
-| `toolkit_geolocate_ip` | Resolve a public IP or hostname to geographic and network metadata — country, city, coordinates, ASN, timezone. |
-| `toolkit_check_network` | **Gated, off by default.** Read-only network diagnostics from the server host — ping, traceroute, TCP connectivity, or egress-IP detection. |
-| `toolkit_check_system` | **Gated, off by default.** Report a facet of the server host's system state — OS, CPU, memory, load average, or network interfaces. |
+| `toolkit_hash_value` | Generate a digest (sha256/sha384/sha512/sha1/md5) as hex, base64, or SRI, or constant-time-compare a value against an expected digest |
+| `toolkit_generate_id` | Mint cryptographically random UUIDv4, UUIDv7, or ULID identifiers, up to 1000 per call |
+| `toolkit_generate_qr` | Encode text or a URL as a QR code in SVG, base64 PNG, or terminal half-blocks |
+| `toolkit_encode_value` | Encode or decode base64, base64url, hex, or URL percent-encoding |
+| `toolkit_geolocate_ip` | Resolve a public IP or hostname to country, city, coordinates, ASN, and timezone |
+| `toolkit_check_network` | **Gated, off by default.** Ping, traceroute, TCP connectivity, or egress-IP check from the server host |
+| `toolkit_check_system` | **Gated, off by default.** OS, CPU, memory, load average, or network interfaces of the server host |
 
 ## Capability reference
 
 ### `toolkit_hash_value` <sub>tool</sub>
 
-- `operation`: `generate` (a digest) or `compare` (timing-safe check via `timingSafeEqual`); omitted, it compares when `expected` is sent and generates otherwise. `generate` sent together with `expected` is rejected with a typed `expected_without_compare` error rather than ignoring `expected`
-- Algorithms: `sha256` (default), `sha384`, and `sha512` for security; `sha1` and `md5` are exposed for checksum and file-integrity compatibility only — never for passwords or signatures
-- `digestEncoding` sets the generated digest's form: `hex` (lowercase, default), `base64`, or `sri` (`sha512-<base64>`, the npm lockfile `integrity` and Subresource Integrity form — sha256/sha384/sha512 only)
-- `expected` is accepted as hex, base64, or SRI, recognized by its shape at the algorithm's digest length, so a published checksum is pasted as-is. An SRI value may hold several space-separated entries, as an npm `integrity` field can: entries for other algorithms are skipped, and it matches when any entry for `algorithm` does
-- Typed errors separate an unrecognizable digest (`expected_malformed`), one of the wrong length (`expected_length_mismatch`, whose hint names the algorithm that length belongs to), and an SRI value with no entry for `algorithm` (`expected_algorithm_mismatch`)
-- `inputEncoding` reads `value` as `utf8` (default), `hex`, or `base64`, so binary blobs skip a decode round-trip
-- Canonical use: match a download against a vendor-published checksum or a lockfile integrity entry
+- `value` read per `inputEncoding` (`utf8` default, `hex`, `base64`); `algorithm` is `sha256` (default), `sha384`, or `sha512`, with `sha1` and `md5` for checksum compatibility only; `operation` is `generate` or `compare`, and when omitted it compares if `expected` is sent
+- `generate` returns `digest` in `digestEncoding` (`hex` default, `base64`, or `sri` for the SHA-2 algorithms) plus `lengthInBytes`; `compare` returns `matches` against `expected`, given as hex, base64, or SRI, including a multi-entry npm `integrity` value
+- A bad `expected` fails as `expected_malformed`, `expected_length_mismatch` (the hint names the algorithm that length fits), or `expected_algorithm_mismatch`
 
 ---
 
 ### `toolkit_generate_id` <sub>tool</sub>
 
-- `type`: `uuid_v4` (random, default), `uuid_v7` (time-ordered, sortable by creation), or `ulid` (26-char Crockford base32, lexicographically sortable)
-- `count` mints a batch up to 1000 in one call; the returned `ids` array always holds exactly `count` values
-- `uuid_v7` and `ulid` batches are monotonic — strictly increasing even within the same millisecond — so `ids` stays in sorted creation order. Ids minted in the same millisecond are separated by random gaps (a 32-bit draw plus one), so no id in a batch is derivable from another; for `ulid` this departs from the spec's reference +1 increment on purpose
-- Read-only — minting changes nothing — but never idempotent, so a client won't cache or deduplicate a batch
+- `type` is `uuid_v4` (default), `uuid_v7`, or `ulid`; `count` is 1–1000 (default 1)
+- `ids` always holds exactly `count` values; `uuid_v7` and `ulid` batches are strictly increasing even within one millisecond, with random gaps so no id is derivable from another
 
 ---
 
 ### `toolkit_generate_qr` <sub>tool</sub>
 
-- `format`: `svg` (inline markup), `png_base64` (raster bytes with `mimeType` and `byteLength`), or `terminal` (plain Unicode half-blocks with no escape codes, fenced in `content[]`)
-- `terminal` is drawn for a dark background: light modules, quiet zone included, are blocks and dark modules are spaces
-- `errorCorrection` (L/M/Q/H) trades data capacity for damage tolerance; `margin` sets the quiet-zone width in modules for every format; `scale` sets pixels per module for `svg` (its `width`/`height`) and `png_base64`, so both are `(modules + 2 × margin) × scale` px per side
-- The returned `version` (1–40) reflects how dense the encoded data is
-- `png_base64` also arrives as an MCP image content block, so a client reading `content[]` can render the code without decoding `structuredContent`
-- A rendered PNG is bounded at 2048 px per side — `(modules + 2 × margin) × scale` — so a dense symbol at a high `scale` is rejected with a typed `raster_too_large` error naming a scale that fits; `svg` and `terminal` are unbounded
-- `data` is encoded as UTF-8 and capped at 2953 bytes — the absolute ceiling (version 40, level L, byte mode); a non-ASCII character takes 2–4 bytes, and usable capacity is lower at higher `errorCorrection` levels, so over-capacity input is rejected with a typed `data_too_large` error that reports the payload's byte count
+- `data` up to 2953 UTF-8 bytes at `errorCorrection` `L`, less at `M` (default), `Q`, and `H`; `format` is `svg` (default), `png_base64`, or `terminal`; `margin` 0–20 modules (default 4), `scale` 1–32 px per module (default 4)
+- Returns `content`, the symbol `version` (1–40), `mimeType` for image formats, and `byteLength` for PNG; `png_base64` also arrives as an MCP image block, and `terminal` is plain Unicode half-blocks drawn for a dark background
+- Over-capacity input fails as `data_too_large` with its byte count; a PNG over 2048 px per side fails as `raster_too_large` with a scale that fits, while `svg` and `terminal` have no pixel cap
 
 ---
 
 ### `toolkit_encode_value` <sub>tool</sub>
 
-- `encoding`: `base64`, `base64url` (URL-safe alphabet), `hex`, or `url` (percent-encoding)
-- `operation`: `encode` (raw UTF-8 → encoding) or `decode` (encoded value → bytes)
-- `outputEncoding` (decode only) returns the recovered bytes as `utf8` text (when omitted), `hex`, or `base64` — lossless for binary data, and a direct transcode between encodings (a base64 digest to hex, for example). Sent with `encode`, it is rejected with a typed `output_encoding_not_applicable` error
-- Decode never substitutes replacement characters: bytes that aren't valid UTF-8 return a typed `decode_not_utf8` error pointing at `outputEncoding`, and a leading byte-order mark is kept
-- Whitespace in `hex`, `base64`, and `base64url` input is ignored, so line-wrapped MIME and PEM bodies decode as-is (without PEM's `-----BEGIN/END-----` lines, which aren't base64); a `url` value is taken literally
-- Malformed decode input returns a typed `decode_failed` error with a recovery hint, not a silent best-effort
+- `operation` (`encode` or `decode`) and `encoding` (`base64`, `base64url`, `hex`, `url`) are required; whitespace in `hex`, `base64`, and `base64url` input is ignored, so wrapped MIME and PEM bodies decode as-is
+- Decode returns `result` as `utf8` text unless `outputEncoding` asks for `hex` or `base64`, which returns the bytes losslessly and transcodes between encodings; malformed input fails as `decode_failed`, and binary bytes as `decode_not_utf8` rather than with replacement characters
 
 ---
 
 ### `toolkit_geolocate_ip` <sub>tool</sub>
 
-- Returns country, region, city, latitude/longitude, ASN, owning organization, and timezone
-- `proxy`, `hosting`, and `mobile` flag when the address is a proxy/VPN/Tor exit, a datacenter network, or a mobile carrier — a `true` on any of them means the coordinates describe infrastructure, not a person. Absent when the provider doesn't report them
-- A hostname is DNS-resolved first; `resolvedIp` echoes the IP actually located, and `source` names the answering provider
-- SSRF-free — the server calls the provider, never the target; the resolved IP is re-checked against private ranges, and private/reserved addresses are rejected (they have no public geolocation)
-- Best-effort and provider-bounded: VPNs, proxies, mobile NAT, and anycast all defeat IP-to-location, accuracy is city-level at best, and absent fields are reported as unknown rather than invented
-- Provider-supplied strings are truncated and stripped of control characters before they reach the response, so registry-controlled text (`org`, `isp`, `as`) cannot flood or format a model's context
-- Keyless by default (ip-api free tier, which is plaintext HTTP — see `TOOLKIT_GEO_BASE_URL`); results are cached in memory by resolved IP under a fixed entry cap
+- `target` is an IPv4/IPv6 address or a dotted hostname, DNS-resolved first; private or reserved addresses fail as `private_target`, unresolvable hostnames as `unresolvable_host`
+- Returns `country`, `countryCode`, `region`, `city`, `latitude`/`longitude`, `asn`, `org`, and `timezone` with `resolvedIp` and `source`; a `true` in `proxy`, `hosting`, or `mobile` means the location describes infrastructure, not a person
+- Keyless ip-api free tier over plaintext HTTP by default (`TOOLKIT_GEO_BASE_URL`, `TOOLKIT_GEO_API_KEY`); results are cached per resolved IP and provider calls are rate-limited
 
 ---
 
 ### `toolkit_check_network` <sub>tool</sub>
 
-- **Gated** — registered only when `TOOLKIT_ENABLE_NET_DIAGNOSTICS=true`; absent from `tools/list` otherwise
-- `mode`: `ping` (ICMP round-trip), `traceroute` (hop path to the target), `connectivity` (raw TCP connect to `target` on `port`), or `public_ip` (the host's own egress IP)
-- A host that does not respond is reported as `reachable: false` — a valid result, not an error. A ping or traceroute binary that is missing, or that exits without a result, is an `unreachable` error naming the binary instead
-- `ping` reports `sent`, `received`, and `packetLossPercent` alongside the average `rttMs`; on macOS/BSD an IPv6 target runs `ping6`/`traceroute6`
-- `connectivity` reports an `outcome` — `open`, `refused` (nothing listening), `timeout` (traffic dropped), or `unreachable` (no route) — and the connect time as `rttMs` when open
-- Diagnoses the **server's** own network, so it is useful on a local or self-hosted deployment; reaching a private/reserved/internal target additionally requires `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`, which keeps the cloud-metadata endpoint blocked by default
+- `mode` is `ping`, `traceroute`, `connectivity`, or `public_ip`; `target` is required except for `public_ip`, and `port` (1–65535) for `connectivity`; `count` 1–10 pings (default 3), `timeoutMs` 100–30000 (default 3000)
+- A silent host is `reachable: false`, not an error; `ping` adds `rttMs`, `sent`, `received`, and `packetLossPercent`, `connectivity` adds `outcome` (`open`, `refused`, `timeout`, `unreachable`), and `traceroute` returns `hops`; an unresolvable host or a ping/traceroute binary that can't run fails as `unreachable`
+- Registered only when `TOOLKIT_ENABLE_NET_DIAGNOSTICS=true`; private and reserved targets fail as `private_target_blocked` unless `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`
 
 ---
 
 ### `toolkit_check_system` <sub>tool</sub>
 
-- **Gated** — registered only when `TOOLKIT_ENABLE_SYSTEM_INFO=true`; absent from `tools/list` otherwise
-- `what`: `os`, `cpu`, `memory`, `load`, or `interfaces`
-- Exactly one facet object is populated per call, matching `what`
-- `memory` reports `availableBytes` (headroom for new allocations) and, when the server runs under a container memory limit, `limitBytes`; `totalBytes`, `freeBytes`, and `usedBytes` are the raw OS figures, which count reclaimable cache as used and read the host's RAM inside a container
-- Describes the host this server runs on, **not** the calling client — meaningful on a local or self-hosted deployment; gated off by default because `os` and `interfaces` disclose host topology and version details
+- `what` is `os`, `cpu`, `memory`, `load`, or `interfaces`; exactly one matching facet object is populated
+- `memory.availableBytes` is the allocation headroom and `limitBytes` appears under a container memory limit; `totalBytes`, `freeBytes`, and `usedBytes` are raw OS figures that count reclaimable cache as used
+- Registered only when `TOOLKIT_ENABLE_SYSTEM_INFO=true`, since `os` and `interfaces` disclose host topology and version details
 
 ## Features
 
@@ -126,18 +103,17 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 
 Toolkit-specific:
 
-- Local, pure-compute core — hashing, ID minting, QR encoding, and value encode/decode run entirely in-process via `node:crypto` and the `qrcode` library; no upstream calls
-- `toolkit_geolocate_ip` is the one keyless-by-default network call (ip-api free tier, optional `TOOLKIT_GEO_API_KEY`); the server calls the provider directly and re-checks the DNS-resolved IP against private ranges, so a hostname can't smuggle a request to an internal address
-- Fail-closed gating — the two host-probing tools (`toolkit_check_network`, `toolkit_check_system`) are absent from `tools/list` unless explicitly enabled, so a hosted instance exposes no SSRF or info-disclosure surface by default
-- Two-tier network gate — even with diagnostics enabled, private/reserved/loopback/link-local targets (including the cloud-metadata endpoint) stay blocked until a second flag permits them
-- Bounded inputs — QR `data` capped at 2953 bytes, rendered PNGs capped at 2048 px per side, ID batches capped at 1000; CSPRNG-backed primitives with constant-time hash comparison via `timingSafeEqual`
+- Hashing, ID minting, QR encoding, and encode/decode run in-process on `node:crypto` and the `qrcode` library, with no upstream calls
+- Geolocation calls the provider, never the target, and checks the DNS-resolved IP against private ranges, so a hostname can't reach an internal address
+- Fail-closed gating: `toolkit_check_network` and `toolkit_check_system` are absent from `tools/list` unless enabled. Both report on the server's host, not the caller's, so they belong on local or self-hosted deployments
+- Two-tier network gate: with diagnostics on, private, loopback, link-local, and reserved targets (the cloud-metadata endpoint included) stay blocked until `TOOLKIT_ALLOW_PRIVATE_NETWORK=true`
 
 Agent-friendly output:
 
-- Provenance — geolocation echoes `resolvedIp` (the IP actually located) and `source` (the answering provider); absent upstream fields are reported as unknown, never invented
-- Response shaping — provider-supplied strings (`org`, `isp`, `as`) are length-bounded and stripped of control characters before they reach the response, so untrusted registry text can't flood or format a model's context
-- Discriminated output contracts — `operation`, `format`, `mode`, and `what` fields echo back exactly what ran, with only the branch-relevant fields populated per call; an unreachable host in `toolkit_check_network` reports `reachable: false` as valid data, not an error
-- Typed failure reasons — decode, hashing, QR, geolocation, and network failures each carry a structured `reason` plus a next-step recovery hint (e.g. `decode_not_utf8`, `expected_malformed`, `raster_too_large`, `private_target_blocked`); `expected` sent with `generate`, and `outputEncoding` sent with `encode`, are rejected by name rather than silently ignored
+- Provenance: geolocation echoes `resolvedIp` and `source`, and omits fields the provider didn't report instead of inventing them
+- Response shaping: provider strings are capped at 256 characters and stripped of control characters, so registry-controlled text like `org` can't flood or format a model's context
+- Discriminated outputs: `operation`, `format`, `mode`, and `what` echo what ran, and only that branch's fields are populated
+- Typed failures: every declared failure carries a `reason` and a recovery hint, and conflicting inputs (`expected` with `generate`, `outputEncoding` with `encode`) are rejected by name, not ignored
 
 ## Getting started
 
@@ -158,7 +134,7 @@ A public instance is available at `https://toolkit.caseyjhand.com/mcp` — no in
 
 ### Self-Hosted / Local
 
-Add the following to your MCP client configuration file. No API key is required — the five always-on tools and the default keyless geolocation tier work out of the box.
+Add the following to your MCP client configuration file. No API key is required.
 
 ```json
 {
@@ -252,23 +228,23 @@ bun install
 
 ## Configuration
 
-Every variable is optional. Server-specific options are validated at startup via the Zod schema in `src/config/server-config.ts`.
+All variables are optional.
 
 | Variable | Description | Default |
 |:---|:---|:---|
 | `TOOLKIT_ENABLE_NET_DIAGNOSTICS` | Register the gated `toolkit_check_network` tool. Leave off for hosted or shared deployments. | `false` |
-| `TOOLKIT_ENABLE_SYSTEM_INFO` | Register the gated `toolkit_check_system` tool. Meaningful only on a local or self-hosted deployment. | `false` |
-| `TOOLKIT_ALLOW_PRIVATE_NETWORK` | With network diagnostics on, permit private/reserved/loopback targets. The second explicit gate. | `false` |
+| `TOOLKIT_ENABLE_SYSTEM_INFO` | Register the gated `toolkit_check_system` tool. | `false` |
+| `TOOLKIT_ALLOW_PRIVATE_NETWORK` | With network diagnostics on, permit private, reserved, loopback, and link-local targets. | `false` |
 | `TOOLKIT_GEO_API_KEY` | API key for the geolocation endpoint, if it requires one. | none |
-| `TOOLKIT_GEO_BASE_URL` | Base URL for an ip-api-compatible geolocation endpoint. The default is plaintext HTTP — ip-api's HTTPS endpoint is not part of the keyless free tier and answers `403 SSL unavailable for this endpoint` without a paid key. Point this at an HTTPS endpoint (with `TOOLKIT_GEO_API_KEY`) to encrypt the provider request. | `http://ip-api.com` |
+| `TOOLKIT_GEO_BASE_URL` | Base URL for an ip-api-compatible endpoint. The keyless default is plaintext HTTP; ip-api's HTTPS endpoint needs a paid key. | `http://ip-api.com` |
 | `TOOLKIT_GEO_CACHE_TTL_SECONDS` | In-memory geolocation cache TTL in seconds. | `3600` |
-| `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation requests per minute. | `45` |
+| `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation provider requests per minute; cache hits don't count, and excess requests fail with a retryable rate-limit error. | `45` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
-| `MCP_SESSION_MODE` | `auto`, `stateful`, or `stateless`. No tool requests multi-round input. `auto` is the framework schema default and resolves to `stateful`, but with `MCP_SESSION_MODE` unset the server resolves `stateless` from `createApp({ sessionMode })`; an explicit `MCP_SESSION_MODE` value still overrides it. | `stateless` |
+| `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. The server declares `stateless`; an explicit value overrides it. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
-| `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry) (spans, metrics, completion logs). | `false` |
+| `OTEL_ENABLED` | Enable [OpenTelemetry](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 
@@ -300,7 +276,7 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ```sh
 docker build -t toolkit-mcp-server .
-docker run --rm -e MCP_TRANSPORT_TYPE=http -p 3010:3010 toolkit-mcp-server
+docker run --rm -p 3010:3010 toolkit-mcp-server
 ```
 
 The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/toolkit-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
@@ -309,12 +285,12 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 
 | Directory | Purpose |
 |:---|:---|
-| `src/index.ts` | `createApp()` entry point — registers tools and inits services, with fail-closed gating for the two host-probing tools. |
+| `src/index.ts` | `createApp()` entry point — registers the five always-on tools, and the two gated tools only behind their flags. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Seven tools — five always-on, two gated. |
-| `src/services/geo` | Geolocation service — DNS resolution, provider call with retry/backoff, normalization, in-memory cache. |
-| `src/services/network` | Network-diagnostic service plus the shared target validator and private-range classifier. |
-| `tests/` | Unit and integration tests mirroring the `src/` structure. |
+| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Seven tools, five always-on and two gated. |
+| `src/services/geo` | Geolocation service — DNS resolution, provider call with retry, normalization, in-memory cache. |
+| `src/services/network` | Network-diagnostic service plus the shared target schema and private-range classifier. |
+| `tests/` | Vitest suites for tools (`tests/tools`) and services (`tests/services`). |
 
 ## Development guide
 
@@ -322,8 +298,8 @@ See [`CLAUDE.md` / `AGENTS.md`](./AGENTS.md) for development guidelines and arch
 
 - Handlers throw, framework catches — no `try/catch` in tool logic
 - Use `ctx.log` for request-scoped logging, `ctx.state` for tenant-scoped storage
-- Register new tools in the `createApp()` arrays in `src/index.ts`
-- The two host-probing tools register behind their enable-flags; the network target gate validates after DNS resolution — never fabricate a result for an unlocatable or unreachable target
+- Register new tools in the `createApp()` arrays in `src/index.ts`; a host-probing tool registers only behind an enable flag
+- Wrap external API calls: validate raw → normalize to domain type → return output schema; never fabricate missing fields
 
 ## Contributing
 
