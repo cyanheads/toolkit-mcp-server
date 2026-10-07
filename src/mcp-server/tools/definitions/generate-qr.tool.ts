@@ -153,7 +153,6 @@ export const generateQrTool = tool('toolkit_generate_qr', {
         throw ctx.fail(
           'data_too_large',
           `data is ${Buffer.byteLength(input.data, 'utf8')} bytes (UTF-8), which exceeds the QR capacity at error-correction level ${input.errorCorrection}.`,
-          { ...ctx.recoveryFor('data_too_large') },
         );
       }
       throw err;

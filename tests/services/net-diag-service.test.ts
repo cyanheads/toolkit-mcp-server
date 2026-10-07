@@ -2,8 +2,10 @@
  * @fileoverview Tests for NetDiagService's probe internals — the OS-binary
  * command lines per platform and address family, the ping/traceroute output
  * parsers (RTT and packet loss), the split between a real no-reply and a probe
- * that never ran, the TCP connect outcome, the declared failures and their
- * recovery metadata, and the sanitized egress-IP provider failure.
+ * that never ran, the TCP connect outcome, the declared failure reasons, and
+ * the sanitized egress-IP provider failure. The service throws a reason only;
+ * the framework fills its contract recovery hint at the handler boundary, which
+ * the tool-layer contract tests assert.
  * `node:child_process`, `node:dns/promises`, and `node:net`'s `connect` are
  * mocked so no probe, DNS query, or packet leaves the host; `fetch` is stubbed
  * for the egress-IP echo. The private-range gate itself is covered by
@@ -30,11 +32,6 @@ vi.mock('node:net', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:net')>()),
   connect: connectMock,
 }));
-
-/** The contract entries under test — asserted against, never re-typed inline. */
-const recoveryOf = (reason: string) =>
-  checkNetworkTool.errors!.find((e) => e.reason === reason)!.recovery as string;
-const UNREACHABLE_RECOVERY = recoveryOf('unreachable');
 
 /**
  * A stand-in socket: `connect()` hands it back, and the service's listeners
@@ -340,10 +337,7 @@ describe('NetDiagService probes', () => {
         expect(error).toBeInstanceOf(Error);
         expect(error.message).toMatch(/\bping\b/);
         expect(error.message).toContain(errno);
-        expect(error.data).toMatchObject({
-          reason: 'unreachable',
-          recovery: { hint: UNREACHABLE_RECOVERY },
-        });
+        expect(error.data).toMatchObject({ reason: 'unreachable' });
       },
     );
 
@@ -382,7 +376,7 @@ Ping-Statistik für 8.8.8.8:
       ).rejects.toMatchObject({
         message:
           'ping exited with status 1, and its output could not be interpreted as a result (target 8.8.8.8).',
-        data: { reason: 'unreachable', recovery: { hint: UNREACHABLE_RECOVERY } },
+        data: { reason: 'unreachable' },
       });
     });
 
@@ -602,18 +596,15 @@ Ping-Statistik für 8.8.8.8:
   });
 
   describe('required fields', () => {
-    it('throws missing_target with its recovery when a target-bearing mode has no target', async () => {
+    it('throws missing_target when a target-bearing mode has no target', async () => {
       const error = (await run({ mode: 'traceroute', count: 3, timeoutMs: 3000 }).catch(
         (e: unknown) => e,
       )) as { message?: string; data?: Record<string, unknown> };
       expect(error.message).toMatch(/target is required for mode "traceroute"/);
-      expect(error.data).toMatchObject({
-        reason: 'missing_target',
-        recovery: { hint: recoveryOf('missing_target') },
-      });
+      expect(error.data).toMatchObject({ reason: 'missing_target' });
     });
 
-    it('throws missing_port with its recovery before resolving or connecting', async () => {
+    it('throws missing_port before resolving or connecting', async () => {
       const error = (await run({
         mode: 'connectivity',
         target: 'example.com',
@@ -621,10 +612,7 @@ Ping-Statistik für 8.8.8.8:
         timeoutMs: 3000,
       }).catch((e: unknown) => e)) as { message?: string; data?: Record<string, unknown> };
       expect(error.message).toMatch(/port is required/);
-      expect(error.data).toMatchObject({
-        reason: 'missing_port',
-        recovery: { hint: recoveryOf('missing_port') },
-      });
+      expect(error.data).toMatchObject({ reason: 'missing_port' });
       expect(lookupMock).not.toHaveBeenCalled();
       expect(connectMock).not.toHaveBeenCalled();
     });
@@ -864,7 +852,7 @@ Ping-Statistik für 8.8.8.8:
       });
     });
 
-    it('throws unreachable with the declared recovery when the binary fails', async () => {
+    it('throws unreachable when the binary fails', async () => {
       setPlatform('darwin');
       spawnFails('spawn traceroute ENOENT');
       const error = (await run({
@@ -873,17 +861,14 @@ Ping-Statistik für 8.8.8.8:
         count: 3,
         timeoutMs: 3000,
       }).catch((e: unknown) => e)) as { data?: Record<string, unknown>; cause?: unknown };
-      expect(error.data).toMatchObject({
-        reason: 'unreachable',
-        recovery: { hint: UNREACHABLE_RECOVERY },
-      });
+      expect(error.data).toMatchObject({ reason: 'unreachable' });
       // The original failure stays server-side as `cause`.
       expect((error as { cause?: Error }).cause).toBeInstanceOf(Error);
     });
   });
 
   describe('hostname resolution failures', () => {
-    it('throws unreachable with the declared recovery when a hostname will not resolve', async () => {
+    it('throws unreachable when a hostname will not resolve', async () => {
       lookupMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND no-such-host.invalid'));
       const error = (await run({
         mode: 'connectivity',
@@ -893,10 +878,7 @@ Ping-Statistik für 8.8.8.8:
         timeoutMs: 500,
       }).catch((e: unknown) => e)) as { message?: string; data?: Record<string, unknown> };
       expect(error.message).toMatch(/could not resolve/i);
-      expect(error.data).toMatchObject({
-        reason: 'unreachable',
-        recovery: { hint: UNREACHABLE_RECOVERY },
-      });
+      expect(error.data).toMatchObject({ reason: 'unreachable' });
     });
 
     it('probes the resolved address when a hostname does resolve', async () => {

@@ -118,7 +118,7 @@ export class GeoService {
   }
 
   /** Resolve a hostname to its first A/AAAA address; pass IPs through unchanged. */
-  private async resolveTarget(target: string, ctx: Context): Promise<string> {
+  private async resolveTarget(target: string): Promise<string> {
     if (isIP(target) !== 0) return target;
     try {
       const { address } = await lookup(target);
@@ -126,7 +126,6 @@ export class GeoService {
     } catch {
       throw validationError(`Hostname "${target}" did not resolve.`, {
         reason: 'unresolvable_host',
-        ...ctx.recoveryFor('unresolvable_host'),
       });
     }
   }
@@ -140,12 +139,12 @@ export class GeoService {
    */
   async lookup(target: string, ctx: Context): Promise<GeoResult> {
     const cfg = getServerConfig();
-    const resolvedIp = await this.resolveTarget(target, ctx);
+    const resolvedIp = await this.resolveTarget(target);
 
     if (isPrivateOrReservedIp(resolvedIp)) {
       throw validationError(
         `${target} resolves to private/reserved address ${resolvedIp}, which has no public geolocation.`,
-        { reason: 'private_target', ...ctx.recoveryFor('private_target') },
+        { reason: 'private_target' },
       );
     }
 

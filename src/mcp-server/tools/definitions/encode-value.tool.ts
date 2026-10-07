@@ -179,7 +179,6 @@ export const encodeValueTool = tool('toolkit_encode_value', {
         throw ctx.fail(
           'output_encoding_not_applicable',
           'outputEncoding is only valid when operation is "decode".',
-          { ...ctx.recoveryFor('output_encoding_not_applicable') },
         );
       }
       ctx.log.info('Encode', { encoding: input.encoding });
@@ -198,12 +197,9 @@ export const encodeValueTool = tool('toolkit_encode_value', {
         throw ctx.fail(
           'decode_not_utf8',
           `value decodes to ${input.encoding} bytes that are not valid UTF-8 text.`,
-          { ...ctx.recoveryFor('decode_not_utf8') },
         );
       }
-      throw ctx.fail('decode_failed', `value is not valid ${input.encoding}.`, {
-        ...ctx.recoveryFor('decode_failed'),
-      });
+      throw ctx.fail('decode_failed', `value is not valid ${input.encoding}.`);
     }
     ctx.log.info('Decode', { encoding: input.encoding, outputEncoding });
     return { encoding: input.encoding, operation: input.operation, outputEncoding, result };

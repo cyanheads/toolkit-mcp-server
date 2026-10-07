@@ -84,27 +84,23 @@ export class NetDiagService {
    * unless TOOLKIT_ALLOW_PRIVATE_NETWORK is set. Returns the resolved IP. This
    * is the single chokepoint every target-bearing mode passes through.
    */
-  private async guardTarget(target: string, ctx: Context): Promise<string> {
-    const resolvedIp = isIP(target) !== 0 ? target : await this.resolve(target, ctx);
+  private async guardTarget(target: string): Promise<string> {
+    const resolvedIp = isIP(target) !== 0 ? target : await this.resolve(target);
     if (isPrivateOrReservedIp(resolvedIp) && !getServerConfig().allowPrivateNetwork) {
       throw validationError(`${target} (${resolvedIp}) is a private/reserved address.`, {
         reason: 'private_target_blocked',
-        ...ctx.recoveryFor('private_target_blocked'),
       });
     }
     return resolvedIp;
   }
 
   /** DNS-resolve a hostname; an unresolvable host is an upstream-class failure. */
-  private async resolve(target: string, ctx: Context): Promise<string> {
+  private async resolve(target: string): Promise<string> {
     try {
       const { address } = await lookup(target);
       return address;
     } catch {
-      throw serviceUnavailable(`Could not resolve "${target}".`, {
-        reason: 'unreachable',
-        ...ctx.recoveryFor('unreachable'),
-      });
+      throw serviceUnavailable(`Could not resolve "${target}".`, { reason: 'unreachable' });
     }
   }
 
@@ -127,7 +123,6 @@ export class NetDiagService {
     if (!target) {
       throw validationError(`target is required for mode "${input.mode}".`, {
         reason: 'missing_target',
-        ...ctx.recoveryFor('missing_target'),
       });
     }
     if (input.mode === 'connectivity') {
@@ -135,13 +130,12 @@ export class NetDiagService {
       if (port === undefined) {
         throw validationError('port is required for mode "connectivity".', {
           reason: 'missing_port',
-          ...ctx.recoveryFor('missing_port'),
         });
       }
-      const resolvedIp = await this.guardTarget(target, ctx);
+      const resolvedIp = await this.guardTarget(target);
       return this.connectivity(target, resolvedIp, port, input.timeoutMs, ctx);
     }
-    const resolvedIp = await this.guardTarget(target, ctx);
+    const resolvedIp = await this.guardTarget(target);
     if (input.mode === 'ping')
       return this.ping(target, resolvedIp, input.count, input.timeoutMs, ctx);
     return this.traceroute(target, resolvedIp, ctx);
@@ -205,7 +199,7 @@ export class NetDiagService {
     if (failure && !loss) {
       throw serviceUnavailable(
         `${binary} ${describeExecFailure(failure, spawnTimeoutMs)} (target ${target}).`,
-        { reason: 'unreachable', ...ctx.recoveryFor('unreachable') },
+        { reason: 'unreachable' },
         { cause: failure },
       );
     }
@@ -276,7 +270,7 @@ export class NetDiagService {
       if (ctx.signal.aborted) throw err;
       throw serviceUnavailable(
         `${binary} ${describeExecFailure(err as ExecError, spawnTimeoutMs)} (target ${target}).`,
-        { reason: 'unreachable', ...ctx.recoveryFor('unreachable') },
+        { reason: 'unreachable' },
         { cause: err },
       );
     }

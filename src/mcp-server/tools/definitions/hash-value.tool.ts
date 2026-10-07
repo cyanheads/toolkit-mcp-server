@@ -249,7 +249,6 @@ export const hashValueTool = tool('toolkit_hash_value', {
       throw ctx.fail(
         'expected_without_compare',
         'expected was supplied with operation "generate", which does not compare.',
-        { ...ctx.recoveryFor('expected_without_compare') },
       );
     }
     if (
@@ -260,7 +259,6 @@ export const hashValueTool = tool('toolkit_hash_value', {
       throw ctx.fail(
         'sri_unsupported_algorithm',
         `digestEncoding "sri" is not defined for ${algorithm}.`,
-        { ...ctx.recoveryFor('sri_unsupported_algorithm') },
       );
     }
 
@@ -268,23 +266,20 @@ export const hashValueTool = tool('toolkit_hash_value', {
     try {
       data = decodeInput(input.value, input.inputEncoding);
     } catch {
-      throw ctx.fail('invalid_input_encoding', `value is not valid ${input.inputEncoding}.`, {
-        ...ctx.recoveryFor('invalid_input_encoding'),
-      });
+      throw ctx.fail('invalid_input_encoding', `value is not valid ${input.inputEncoding}.`);
     }
 
     const digest = createHash(algorithm).update(data).digest();
 
     if (operation === 'compare') {
       if (expected === undefined) {
-        throw ctx.fail('missing_expected', undefined, { ...ctx.recoveryFor('missing_expected') });
+        throw ctx.fail('missing_expected');
       }
       const parsed = parseExpected(expected, algorithm);
       if (parsed.kind === 'malformed') {
         throw ctx.fail(
           'expected_malformed',
           `expected is not a hex, base64, or SRI digest for ${algorithm}.`,
-          { ...ctx.recoveryFor('expected_malformed') },
         );
       }
       if (parsed.kind === 'sriAlgorithm') {
