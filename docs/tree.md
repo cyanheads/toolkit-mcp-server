@@ -1,6 +1,6 @@
 # toolkit-mcp-server - Directory Structure
 
-Generated on: 2026-10-07 11:21:41
+Generated on: 2026-10-14 18:48:49
 
 ```text
 toolkit-mcp-server/
@@ -164,18 +164,21 @@ toolkit-mcp-server/
 │   └── index.ts
 ├── tests/
 │   ├── services/
+│   │   ├── geo-quota.test.ts
 │   │   ├── geo-service-correlation.test.ts
 │   │   ├── geo-service.test.ts
 │   │   ├── net-diag-gate.test.ts
 │   │   ├── net-diag-service.test.ts
 │   │   ├── network-target.test.ts
-│   │   └── server-config.test.ts
+│   │   ├── server-config.test.ts
+│   │   └── startup-config.test.ts
 │   └── tools/
 │       ├── check-network.tool.test.ts
 │       ├── check-system.tool.test.ts
 │       ├── encode-value.tool.test.ts
 │       ├── generate-id.tool.test.ts
 │       ├── generate-qr.tool.test.ts
+│       ├── geo-batch.test.ts
 │       ├── geolocate-ip.tool.test.ts
 │       ├── hash-value.tool.test.ts
 │       └── wire-contract.test.ts

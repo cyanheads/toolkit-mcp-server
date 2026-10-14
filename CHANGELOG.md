@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.3.3](changelog/2.3.x/2.3.3.md) — 2026-10-14 · 🛡️ Security
+
+Batch geolocation with quota recovery, Windows ping accuracy, and clean configuration startup.
+
 ## [2.3.2](changelog/2.3.x/2.3.2.md) — 2026-10-07
 
 Framework @cyanheads/mcp-ts-core ^0.13.6 → ^0.13.13: tool error results end with their request id, error data no longer carries server stack traces or request context, and the Docker image installs its dependencies on the build platform.
