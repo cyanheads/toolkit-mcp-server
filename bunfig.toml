@@ -1,5 +1,5 @@
 # Bunfig: Centralized configuration for Bun behavior
-# For more options, see: https://bun.sh/docs/runtime/bunfig
+# For more options, see: https://bun.com/docs/runtime/bunfig
 
 [install]
 # Block package versions published less than 3 days ago — supply-chain guard
