@@ -23,20 +23,8 @@ import { hashValueTool } from './mcp-server/tools/definitions/hash-value.tool.js
 import { initGeoService } from './services/geo/geo-service.js';
 import { initNetDiagService } from './services/network/net-diag-service.js';
 
-const serverConfig = getServerConfig();
-
-/** Always-on: pure compute + the SSRF-free geolocation lookup. Zero config. */
-const tools: AnyToolDefinition[] = [
-  hashValueTool,
-  generateIdTool,
-  generateQrTool,
-  encodeValueTool,
-  geolocateIpTool,
-];
-
-// Gated tools — registered only behind their enable-flag (fail-closed).
-if (serverConfig.enableNetDiagnostics) tools.push(checkNetworkTool);
-if (serverConfig.enableSystemInfo) tools.push(checkSystemTool);
+/** Setup fills the catalog after framework environment loading and before registration. */
+const tools: AnyToolDefinition[] = [];
 
 await createApp({
   name: 'toolkit-mcp-server',
@@ -52,6 +40,10 @@ await createApp({
   sessionMode: 'stateless',
   tools,
   setup() {
+    const serverConfig = getServerConfig();
+    tools.push(hashValueTool, generateIdTool, generateQrTool, encodeValueTool, geolocateIpTool);
+    if (serverConfig.enableNetDiagnostics) tools.push(checkNetworkTool);
+    if (serverConfig.enableSystemInfo) tools.push(checkSystemTool);
     initGeoService();
     if (serverConfig.enableNetDiagnostics) {
       initNetDiagService();
