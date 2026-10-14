@@ -197,6 +197,10 @@ const PING_LINUX_DUPLICATES = `--- 8.8.8.8 ping statistics ---
 rtt min/avg/max/mdev = 10.538/11.200/11.862/0.662 ms
 `;
 const PING_WINDOWS_PARTIAL = `
+Reply from 8.8.8.8: bytes=32 time=10ms TTL=118
+Reply from 8.8.8.8: bytes=32 time=12ms TTL=118
+Reply from 8.8.8.8: bytes=32 time=11ms TTL=118
+Request timed out.
 Ping statistics for 8.8.8.8:
     Packets: Sent = 4, Received = 3, Lost = 1 (25% loss),
 Approximate round trip times in milli-seconds:
@@ -247,6 +251,40 @@ describe('NetDiagService probes', () => {
   });
 
   describe('ping — platform command lines', () => {
+    it.each([
+      ['Destination host unreachable', 0],
+      ['Destination net unreachable', 0],
+      ['TTL expired in transit', 0],
+    ] as const)('counts Windows %s replies as failed echoes', async (message, received) => {
+      setPlatform('win32');
+      spawnSucceeds(
+        `Reply from 10.0.0.1: ${message}.\nReply from 10.0.0.1: ${message}.\nReply from 10.0.0.1: ${message}.\nPackets: Sent = 3, Received = 3, Lost = 0 (0% loss),`,
+      );
+      expect(
+        await run({ mode: 'ping', target: '8.8.8.8', count: 3, timeoutMs: 3000 }),
+      ).toMatchObject({ sent: 3, received, packetLossPercent: 100, reachable: false });
+    });
+
+    it('counts only timed Windows echoes in mixed output', async () => {
+      setPlatform('win32');
+      spawnSucceeds(
+        'Reply from 8.8.8.8: bytes=32 time<1ms TTL=118\nReply from 10.0.0.1: Destination host unreachable.\nReply from 10.0.0.1: TTL expired in transit.\nPackets: Sent = 3, Received = 3, Lost = 0 (0% loss),',
+      );
+      expect(
+        await run({ mode: 'ping', target: '8.8.8.8', count: 3, timeoutMs: 3000 }),
+      ).toMatchObject({ sent: 3, received: 1, packetLossPercent: 66.7, reachable: true });
+    });
+
+    it('counts Windows IPv6 timed echoes without TTL', async () => {
+      setPlatform('win32');
+      spawnSucceeds(
+        'Reply from 2606:4700:4700::1111: time=12ms\nReply from 2606:4700:4700::1111: time<1ms\nRequest timed out.\nPackets: Sent = 3, Received = 2, Lost = 1 (33% loss),',
+      );
+      expect(
+        await run({ mode: 'ping', target: '2606:4700:4700::1111', count: 3, timeoutMs: 3000 }),
+      ).toMatchObject({ sent: 3, received: 2, packetLossPercent: 33.3, reachable: true });
+    });
+
     it('spawns the BSD flag set on darwin (-c count, -t deadline in seconds)', async () => {
       setPlatform('darwin');
       spawnSucceeds(PING_BSD);

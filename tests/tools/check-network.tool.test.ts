@@ -237,6 +237,36 @@ describe('toolkit_check_network — both client surfaces', () => {
     expect(text).toContain('2 sent, 0 received, 100% loss');
   });
 
+  it('reports Windows ICMP errors as failed echoes on both client surfaces', async () => {
+    setPlatform('win32');
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (e: Error | null, r: { stdout: string; stderr: string }) => void,
+      ) =>
+        cb(null, {
+          stdout:
+            'Reply from 10.0.0.1: Destination host unreachable.\nPackets: Sent = 1, Received = 1, Lost = 0 (0% loss),',
+          stderr: '',
+        }),
+    );
+    const result = await runToolContract(checkNetworkTool, {
+      mode: 'ping',
+      target: '8.8.8.8',
+      count: 1,
+    });
+    expect(result.structuredContent).toMatchObject({
+      reachable: false,
+      sent: 1,
+      received: 0,
+      packetLossPercent: 100,
+    });
+    expect(contentText(result)).toContain('NOT reachable');
+    expect(contentText(result)).toContain('1 sent, 0 received, 100% loss');
+  });
+
   it('carries a missing ping binary as a typed unreachable error on both surfaces', async () => {
     execFileMock.mockImplementation(
       (cmd: string, _args: string[], _opts: unknown, cb: (e: Error) => void) =>

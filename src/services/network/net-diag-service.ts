@@ -212,8 +212,9 @@ export class NetDiagService {
   /**
    * Parse sent/received counts from a ping summary line. macOS/BSD print
    * "N packets transmitted, M packets received"; Linux iputils drops the second
-   * "packets"; Windows prints "Sent = N, Received = M". Loss is computed from
-   * the counts, since each platform rounds its printed percentage differently.
+   * "packets"; Windows prints "Sent = N, Received = M", but its received count
+   * includes ICMP errors. Count timed echo reply lines on Windows instead.
+   * Loss is computed from the counts, since platforms round differently.
    */
   private parsePacketLoss(stdout: string): PacketLoss | undefined {
     const counts =
@@ -221,7 +222,11 @@ export class NetDiagService {
       stdout.match(/Sent = (\d+), Received = (\d+)/);
     if (!counts?.[1] || !counts[2]) return;
     const sent = Number.parseInt(counts[1], 10);
-    const received = Number.parseInt(counts[2], 10);
+    const received =
+      process.platform === 'win32'
+        ? [...stdout.matchAll(/^\s*Reply from [^\r\n]+:\s*[^\r\n]*\btime[=<]\s*[\d.]+\s*ms\b/gim)]
+            .length
+        : Number.parseInt(counts[2], 10);
     if (sent === 0) return;
     const packetLossPercent = Math.round(((sent - received) / sent) * 1000) / 10;
     return { sent, received, packetLossPercent };
