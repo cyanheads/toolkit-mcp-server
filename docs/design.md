@@ -171,7 +171,7 @@ The surface is overwhelmingly internal capability backed by Node builtins — on
 
 | Service | Wraps | Key methods | Used by |
 |---|---|---|---|
-| `GeoService` | One external IP-geolocation API (keyless ip-api class by default; provider/key overridable) | `lookup(target): Promise<GeoResult>` — DNS-resolve hostname → IP, call provider with retry/backoff, normalize sparse upstream, in-memory TTL cache keyed by resolved IP | `toolkit_geolocate_ip` |
+| `GeoService` | One external IP-geolocation API (keyless ip-api class by default; provider/key overridable) | `lookup(target, ctx): Promise<GeoResult>` and `lookupBatch(targets, ctx): Promise<GeoBatchResult>` — resolve and guard each target, reuse the IP-keyed TTL cache, normalize sparse provider results, and preserve batch positions and remainder | `toolkit_geolocate_ip` |
 
 Everything else needs **no service** — pure functions over Node builtins, invoked directly from the handler:
 
@@ -266,7 +266,7 @@ The lesson the description must teach: use `operation: 'compare'` with `expected
 
 | # | Call | Purpose |
 |---|---|---|
-| 1 | `toolkit_geolocate_ip` `{ target: '203.0.113.7' }` | One lookup → country/city/lat-lon + `asn`/`org`. `target` also accepts a hostname (DNS-resolved first; `resolvedIp` echoes which IP was used). |
+| 1 | `toolkit_geolocate_ip` `{ target: '8.8.8.8' }` | One lookup → country/city/lat-lon + `asn`/`org`. `target` also accepts a hostname (DNS-resolved first; `resolvedIp` echoes which IP was used). |
 
 No `check_network` dependency — geolocation calls the provider, never the target, so it's SSRF-free and always-on.
 
@@ -337,7 +337,7 @@ A host that is simply down is not an error: ping and connectivity report it as `
 
 - **`format()` content-complete on every tool.** Hash → the digest (or match verdict) in a code span; QR `terminal` → the renderable block inside a code fence (so a Markdown client keeps the spaces that are its dark modules), `svg` → the markup, `png_base64` → a note plus byte length (not the full blob inline for PNG); geo → a labeled summary (country, city, ASN/org, coords). Every `output` field the model needs appears in the rendered text — `format-parity` enforces it.
 - **Batch ID disclosure.** `toolkit_generate_id` with a large `count` is bounded by `z.number().int().min(1).max(1000)` — not a silently truncated list. `count` is small enough that no truncation/`ctx.enrich.truncated` is needed; the array is always complete.
-- **Geolocation preserves uncertainty.** Sparse upstream fields stay nullable in both `structuredContent` and `format()`. The render says "ASN: unknown" rather than omitting or inventing. Tests include a sparse payload (reserved range, free-tier ASN omission).
+- **Geolocation preserves uncertainty.** Absent upstream fields stay omitted in `structuredContent`; `format()` renders them as unknown. Tests include sparse payloads with omitted metadata.
 - **PNG bytes don't bloat context.** `png_base64` returns the base64 string in `content` (the artifact the model can't emit, so it must be returned) but `format()` summarizes ("PNG, {byteLength} bytes, QR version {version}") rather than dumping the base64 into the markdown trailer twice.
 - **`source` provenance on geo.** Always report which provider answered, so the agent (and human) can weigh the result.
 
