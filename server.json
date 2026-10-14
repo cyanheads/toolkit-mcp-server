@@ -76,6 +76,13 @@
           "format": "string",
           "isRequired": false,
           "default": "45"
+        },
+        {
+          "name": "TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN",
+          "description": "Independent batch geolocation requests per minute; excess requests fail immediately with wait and recovery guidance.",
+          "format": "string",
+          "isRequired": false,
+          "default": "15"
         }
       ],
       "transport": {
@@ -178,6 +185,13 @@
           "format": "string",
           "isRequired": false,
           "default": "45"
+        },
+        {
+          "name": "TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN",
+          "description": "Independent batch geolocation requests per minute; excess requests fail immediately with wait and recovery guidance.",
+          "format": "string",
+          "isRequired": false,
+          "default": "15"
         }
       ],
       "transport": {

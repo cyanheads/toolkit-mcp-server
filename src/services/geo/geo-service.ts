@@ -11,8 +11,14 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { config } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
 import {
+  McpError,
+  rateLimited,
+  serviceUnavailable,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
+import {
+  defaultIsTransient,
   fetchWithTimeout,
   logger,
   RateLimiter,
@@ -21,7 +27,7 @@ import {
 } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { isPrivateOrReservedIp } from '@/services/network/target.js';
-import type { GeoResult } from './types.js';
+import type { GeoBatchFailure, GeoBatchResult, GeoResult } from './types.js';
 
 /** Raw ip-api response — every geo field is optional; only status/query are reliable. */
 type IpApiResponse = {
@@ -90,6 +96,14 @@ function boundedField(value: string | undefined): string | undefined {
   return cleaned || undefined;
 }
 
+/** Compare equivalent IPv6 spellings as well as literal IPv4 provider queries. */
+function sameIp(query: string, resolvedIp: string): boolean {
+  const family = isIP(query);
+  if (family === 0 || query.includes('%')) return false;
+  const canonical = (ip: string) => (isIP(ip) === 6 ? new URL(`http://[${ip}]/`).hostname : ip);
+  return canonical(query) === canonical(resolvedIp);
+}
+
 export class GeoService {
   /**
    * In-memory TTL cache keyed by resolved IP. Geolocation is stable, so repeats
@@ -105,25 +119,126 @@ export class GeoService {
    * accidentally. Single fixed key, so the per-key cleanup timer is disabled.
    */
   private readonly rateLimiter: RateLimiter;
+  private readonly batchRateLimiter: RateLimiter;
+  private readonly cooldownUntil = { single: 0, batch: 0 };
 
   constructor() {
-    this.rateLimiter = new RateLimiter(config, logger);
-    this.rateLimiter.configure({
-      maxRequests: getServerConfig().geoRateLimitPerMin,
-      windowMs: 60_000,
-      cleanupInterval: 0,
-      errorMessage:
-        'Geolocation lookups are rate-limited to stay within the provider quota. Retry in {waitTime}.',
+    this.rateLimiter = this.makeLimiter(getServerConfig().geoRateLimitPerMin);
+    this.batchRateLimiter = this.makeLimiter(getServerConfig().geoBatchRateLimitPerMin);
+  }
+
+  private makeLimiter(maxRequests: number): RateLimiter {
+    const limiter = new RateLimiter(config, logger);
+    limiter.configure({ maxRequests, windowMs: 60_000, cleanupInterval: 0 });
+    return limiter;
+  }
+
+  private quotaError(waitTimeSeconds: number): McpError {
+    return rateLimited(`Geolocation quota exhausted. Retry in ${waitTimeSeconds} seconds.`, {
+      reason: 'rate_limited',
+      waitTimeSeconds,
+      retryable: true,
+      recovery: {
+        hint: `Wait ${waitTimeSeconds} seconds before retrying, or reuse a cached geolocation result.`,
+      },
     });
   }
 
+  private checkQuota(endpoint: 'single' | 'batch'): void {
+    this.checkCooldown(endpoint);
+    try {
+      (endpoint === 'single' ? this.rateLimiter : this.batchRateLimiter).check(RATE_LIMIT_KEY);
+    } catch (error) {
+      if (!(error instanceof McpError)) throw error;
+      throw this.quotaError(Number(error.data?.waitTimeSeconds));
+    }
+  }
+
+  private checkCooldown(endpoint: 'single' | 'batch'): void {
+    const wait = Math.ceil((this.cooldownUntil[endpoint] - Date.now()) / 1000);
+    if (wait > 0) throw this.quotaError(wait);
+  }
+
+  private setCooldown(endpoint: 'single' | 'batch', ttl: string | undefined | null): number {
+    const seconds = ttl && /^\d+$/.test(ttl) ? Number(ttl) : Number.NaN;
+    const wait = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) : 60;
+    this.cooldownUntil[endpoint] = Math.max(this.cooldownUntil[endpoint], Date.now() + wait * 1000);
+    return wait;
+  }
+
+  private isProvider429(error: unknown): error is McpError {
+    return error instanceof McpError && error.data?.status === 429;
+  }
+
+  private async request<T>(
+    endpoint: 'single' | 'batch',
+    url: URL,
+    ctx: Context,
+    body?: string,
+  ): Promise<T> {
+    ctx.signal.throwIfAborted();
+    this.checkQuota(endpoint);
+    try {
+      return await withRetry(
+        async () => {
+          this.checkCooldown(endpoint);
+          const response = await fetchWithTimeout(url.toString(), 8000, ctx, {
+            signal: ctx.signal,
+            errorHeaders: ['X-Ttl', 'X-Rl'],
+            ...(body === undefined
+              ? {}
+              : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }),
+          });
+          if (response.headers?.get('X-Rl') === '0')
+            this.setCooldown(endpoint, response.headers.get('X-Ttl'));
+          return (await response.json()) as T;
+        },
+        {
+          operation: endpoint === 'single' ? 'GeoService.lookup' : 'GeoService.lookupBatch',
+          context: ctx,
+          baseDelayMs: 1500,
+          signal: ctx.signal,
+          isTransient: (error) =>
+            !this.isProvider429(error) &&
+            !(error instanceof McpError && error.data?.reason === 'rate_limited') &&
+            defaultIsTransient(error),
+        },
+      );
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      if (err instanceof McpError && err.data?.reason === 'rate_limited') throw err;
+      if (this.isProvider429(err)) {
+        const headers = err.data?.headers as Record<string, string> | undefined;
+        throw this.quotaError(this.setCooldown(endpoint, headers?.['x-ttl']));
+      }
+      logger.error(
+        'Geo provider request failed',
+        err instanceof Error ? err : new Error(String(err)),
+        withExtra(ctx, { endpoint }),
+      );
+      throw serviceUnavailable(
+        `Geolocation provider "${GEO_PROVIDER}" is unavailable. Try again shortly.`,
+        undefined,
+        { cause: err },
+      );
+    }
+  }
+
   /** Resolve a hostname to its first A/AAAA address; pass IPs through unchanged. */
-  private async resolveTarget(target: string): Promise<string> {
+  private async resolveTarget(target: string, ctx: Context): Promise<string> {
+    ctx.signal.throwIfAborted();
     if (isIP(target) !== 0) return target;
     try {
-      const { address } = await lookup(target);
+      const { address } = await new Promise<{ address: string }>((resolve, reject) => {
+        const abort = () => reject(ctx.signal.reason);
+        ctx.signal.addEventListener('abort', abort, { once: true });
+        void lookup(target)
+          .then(resolve, reject)
+          .finally(() => ctx.signal.removeEventListener('abort', abort));
+      });
       return address;
-    } catch {
+    } catch (error) {
+      if (ctx.signal.aborted) throw error;
       throw validationError(`Hostname "${target}" did not resolve.`, {
         reason: 'unresolvable_host',
       });
@@ -139,7 +254,8 @@ export class GeoService {
    */
   async lookup(target: string, ctx: Context): Promise<GeoResult> {
     const cfg = getServerConfig();
-    const resolvedIp = await this.resolveTarget(target);
+    const resolvedIp = await this.resolveTarget(target, ctx);
+    ctx.signal.throwIfAborted();
 
     if (isPrivateOrReservedIp(resolvedIp)) {
       throw validationError(
@@ -154,78 +270,146 @@ export class GeoService {
       return { ...cached.result, target };
     }
 
-    // Throttle only actual provider calls — cache hits above never reach the
-    // upstream. Throws a RateLimited error when the per-minute budget is spent.
-    this.rateLimiter.check(RATE_LIMIT_KEY);
-
     const url = new URL(`/json/${encodeURIComponent(resolvedIp)}`, cfg.geoBaseUrl);
     url.searchParams.set('fields', IP_API_FIELDS);
     if (cfg.geoApiKey) url.searchParams.set('key', cfg.geoApiKey);
 
-    let raw: IpApiResponse;
-    try {
-      // `Context extends RequestContext`, so the handler ctx goes straight into
-      // the network and log utilities. They project it to the canonical request
-      // fields before serializing, so no live handles ride along.
-      raw = await withRetry(
-        async () => {
-          const response = await fetchWithTimeout(url.toString(), 8000, ctx, {
-            signal: ctx.signal,
-          });
-          return (await response.json()) as IpApiResponse;
-        },
-        {
-          operation: 'GeoService.lookup',
-          context: ctx,
-          baseDelayMs: 1500,
-          signal: ctx.signal,
-        },
-      );
-    } catch (err) {
-      // Caller cancellation isn't a provider failure — let it bubble unchanged.
-      if (ctx.signal.aborted) throw err;
-      // The framework fetch error names the provider URL — query string and
-      // TOOLKIT_GEO_API_KEY included — the HTTP status, and up to 500 bytes of
-      // the upstream response body. Re-throw a clean ServiceUnavailable so none
-      // of it reaches the client, keeping the original as `cause` for
-      // server-side logs and telemetry only. The raw error goes to the process
-      // logger and NOT `ctx.log`, which is dual-sink: it mirrors every call to
-      // the client as `notifications/message`, which would put `error.message`
-      // straight back onto the wire this re-throw exists to keep clean.
-      logger.error(
-        'Geo provider request failed',
-        err instanceof Error ? err : new Error(String(err)),
-        withExtra(ctx, { resolvedIp }),
-      );
-      throw serviceUnavailable(
-        `Geolocation provider "${GEO_PROVIDER}" is unavailable. Try again shortly.`,
-        undefined,
-        { cause: err },
-      );
-    }
+    const raw = await this.request<IpApiResponse>('single', url, ctx);
+    return this.accept(raw, target, resolvedIp, ctx);
+  }
 
+  private accept(raw: IpApiResponse, target: string, resolvedIp: string, ctx: Context): GeoResult {
     if (raw.status === 'fail') {
+      logger.debug(
+        'Geo provider could not locate address',
+        withExtra(ctx, { resolvedIp, providerMessage: raw.message }),
+      );
       // Provider classified the IP itself as unlocatable (reserved/bogon/unrouted).
       // This will never succeed on retry, so surface it as a (non-retryable)
       // validation error. The target passed the private-range guard, so it is a
       // public-format address — the recovery hint must NOT imply the caller
       // failed to pass a public IP (it reads oddly for e.g. TEST-NET ranges).
-      throw validationError(
-        `Geolocation provider could not locate ${resolvedIp}: ${boundedField(raw.message) ?? 'unknown reason'}.`,
-        {
-          reason: 'private_target',
-          retryable: false,
-          recovery: {
-            hint: 'This address has no public geolocation (it is reserved, unrouted, or bogon). Use a routable public IP.',
-          },
+      throw validationError(`Geolocation provider could not locate ${resolvedIp}.`, {
+        reason: 'private_target',
+        retryable: false,
+        recovery: {
+          hint: 'This address has no public geolocation (it is reserved, unrouted, or bogon). Use a routable public IP.',
         },
-      );
+      });
     }
 
     const result = this.normalize(raw, target, resolvedIp);
-    this.cacheSet(resolvedIp, { result, expiresAt: Date.now() + cfg.geoCacheTtlSeconds * 1000 });
+    this.cacheSet(resolvedIp, {
+      result,
+      expiresAt: Date.now() + getServerConfig().geoCacheTtlSeconds * 1000,
+    });
     ctx.log.info('Geo lookup', { resolvedIp, country: result.countryCode ?? 'unknown' });
     return result;
+  }
+
+  /** Geolocate the first 100 input positions through one independent batch request. */
+  async lookupBatch(targets: string[], ctx: Context): Promise<GeoBatchResult> {
+    if (targets.length > 1000)
+      throw validationError('At most 1000 geolocation targets may be supplied.');
+    const results: (GeoResult | GeoBatchFailure)[] = [];
+    const misses: { index: number; target: string; resolvedIp: string }[] = [];
+    const failure = (target: string, error: unknown): GeoBatchFailure => {
+      if (ctx.signal.aborted) throw error;
+      if (!(error instanceof McpError)) throw error;
+      const reason = (error.data?.reason ??
+        'provider_unavailable') as GeoBatchFailure['error']['reason'];
+      const recovery = error.data?.recovery as { hint: string } | undefined;
+      return {
+        target,
+        error: {
+          reason,
+          message: error.message,
+          ...(typeof error.data?.waitTimeSeconds === 'number'
+            ? { waitTimeSeconds: error.data.waitTimeSeconds }
+            : {}),
+          recovery: recovery ?? {
+            hint:
+              reason === 'unresolvable_host'
+                ? 'Verify the hostname, or pass an IP address directly.'
+                : reason === 'private_target'
+                  ? 'Use a routable public IP with public geolocation.'
+                  : 'Try the geolocation lookup again shortly.',
+          },
+        },
+      };
+    };
+    for (const target of targets.slice(0, 100)) {
+      ctx.signal.throwIfAborted();
+      const index = results.length;
+      try {
+        const resolvedIp = await this.resolveTarget(target, ctx);
+        ctx.signal.throwIfAborted();
+        if (isPrivateOrReservedIp(resolvedIp))
+          throw validationError(
+            `${target} resolves to private/reserved address ${resolvedIp}, which has no public geolocation.`,
+            { reason: 'private_target' },
+          );
+        const cached = this.cache.get(resolvedIp);
+        if (cached && cached.expiresAt > Date.now()) results.push({ ...cached.result, target });
+        else {
+          // Placeholder is replaced after the request; positions include duplicates.
+          results.push({ target, resolvedIp, source: GEO_PROVIDER });
+          misses.push({ index, target, resolvedIp });
+        }
+      } catch (error) {
+        results.push(failure(target, error));
+      }
+    }
+    if (misses.length) {
+      const url = new URL('/batch', getServerConfig().geoBaseUrl);
+      url.searchParams.set('fields', IP_API_FIELDS);
+      const key = getServerConfig().geoApiKey;
+      if (key) url.searchParams.set('key', key);
+      try {
+        const raw = await this.request<IpApiResponse[]>(
+          'batch',
+          url,
+          ctx,
+          JSON.stringify(misses.map(({ resolvedIp }) => ({ query: resolvedIp }))),
+        );
+        if (
+          !Array.isArray(raw) ||
+          raw.length !== misses.length ||
+          raw.some(
+            (row, index) =>
+              !row ||
+              !['success', 'fail'].includes(row.status) ||
+              (row.query !== undefined &&
+                (typeof row.query !== 'string' ||
+                  !sameIp(row.query, (misses[index] as { resolvedIp: string }).resolvedIp))),
+          )
+        )
+          throw serviceUnavailable(
+            'Geolocation provider returned an invalid batch response. Try again shortly.',
+          );
+        for (const [position, entry] of misses.entries()) {
+          ctx.signal.throwIfAborted();
+          try {
+            results[entry.index] = this.accept(
+              raw[position] as IpApiResponse,
+              entry.target,
+              entry.resolvedIp,
+              ctx,
+            );
+          } catch (error) {
+            results[entry.index] = failure(entry.target, error);
+          }
+        }
+      } catch (error) {
+        for (const entry of misses) results[entry.index] = failure(entry.target, error);
+      }
+    }
+    ctx.signal.throwIfAborted();
+    return {
+      results,
+      failedCount: results.filter((row) => 'error' in row).length,
+      unprocessedTargets: targets.slice(100),
+    };
   }
 
   /**
@@ -294,8 +478,8 @@ let _service: GeoService | undefined;
 
 /**
  * Initialize the GeoService singleton — call from createApp setup(). The service
- * reads `getServerConfig()` lazily and caches in memory, so it needs neither
- * core config nor storage.
+ * uses parsed server settings for its process-local cache and quota limits;
+ * it does not require persistent storage.
  */
 export function initGeoService(): void {
   _service = new GeoService();

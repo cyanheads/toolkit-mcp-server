@@ -41,3 +41,21 @@ export type GeoResult = {
 
 /** Discriminator returned by the service so the tool can map it to a typed contract reason. */
 export type GeoFailureReason = 'unresolvable_host' | 'private_target';
+
+/** One failed input position; wait metadata is present for quota refusals. */
+export type GeoBatchFailure = {
+  target: string;
+  error: {
+    reason: GeoFailureReason | 'rate_limited' | 'provider_unavailable';
+    message: string;
+    waitTimeSeconds?: number;
+    recovery: { hint: string };
+  };
+};
+
+/** Ordered outcomes for the first 100 positions, with every remainder disclosed. */
+export type GeoBatchResult = {
+  results: (GeoResult | GeoBatchFailure)[];
+  failedCount: number;
+  unprocessedTargets: string[];
+};

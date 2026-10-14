@@ -2,10 +2,10 @@
 
 **Server:** toolkit-mcp-server
 **Version:** 2.3.2
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.13`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0 (via the framework — not a direct dependency)
-**Zod:** ^4.6.5
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1 (via the framework — not a direct dependency)
+**Zod:** ^4.6.6
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -156,6 +156,8 @@ export function getServerConfig() {
 ```
 
 `parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`TOOLKIT_GEO_CACHE_TTL_SECONDS`) not the path (`geoCacheTtlSeconds`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
+
+Parse the full server configuration and assemble the mutable `tools` array inside `createApp({ setup })`, after framework `.env` loading and before registry construction. Keep one authoritative parse for gate flags and service initialization. Geo supports scalar `target` or ordered `targets` (first 100 positions, 1000-input ceiling, every remainder disclosed); single/batch quotas default to 45/15 via `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` / `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN`. Cache hits are free, endpoint cooldowns are independent, and provider 429 is never retried.
 
 For env booleans use `z.stringbool()`, never `z.coerce.boolean()` — `Boolean("false")` is `true`, so a coerced flag can't be disabled through the environment. `z.stringbool()` parses `true/false/1/0/yes/no/on/off` and rejects anything else, so `=false` actually disables.
 

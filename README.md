@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.3.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.3.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/toolkit-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/toolkit-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/toolkit-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -78,8 +78,10 @@ Developer utilities that run in-process: generate identifiers, QR codes, and cry
 ### `toolkit_geolocate_ip` <sub>tool</sub>
 
 - `target` is an IPv4/IPv6 address or a dotted hostname, DNS-resolved first; private or reserved addresses fail as `private_target`, unresolvable hostnames as `unresolvable_host`
+- Alternatively supply `targets` (up to 1000 entries): the first 100 input positions return ordered `results`, including duplicate positions and per-target errors with recovery; `failedCount` counts processed failures and `unprocessedTargets` lists every remainder to resubmit. Supply one nonblank `target` or one nonempty `targets` array.
 - Returns `country`, `countryCode`, `region`, `city`, `latitude`/`longitude`, `asn`, `org`, and `timezone` with `resolvedIp` and `source`; a `true` in `proxy`, `hosting`, or `mobile` means the location describes infrastructure, not a person
 - Keyless ip-api free tier over plaintext HTTP by default (`TOOLKIT_GEO_BASE_URL`, `TOOLKIT_GEO_API_KEY`); results are cached per resolved IP and provider calls are rate-limited
+- Single and batch request budgets are independent (`TOOLKIT_GEO_RATE_LIMIT_PER_MIN=45`, `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN=15`). Quota refusals report `rate_limited`, seconds to wait, and recovery; cache hits stay free. Provider 429 is never retried, and endpoint cooldowns honor `X-Ttl` (60 seconds if invalid, capped at one hour).
 
 ---
 
@@ -239,6 +241,7 @@ All variables are optional.
 | `TOOLKIT_GEO_BASE_URL` | Base URL for an ip-api-compatible endpoint. The keyless default is plaintext HTTP; ip-api's HTTPS endpoint needs a paid key. | `http://ip-api.com` |
 | `TOOLKIT_GEO_CACHE_TTL_SECONDS` | In-memory geolocation cache TTL in seconds. | `3600` |
 | `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation provider requests per minute; cache hits don't count, and excess requests fail with a retryable rate-limit error. | `45` |
+| `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN` | Independent batch provider requests per minute; each request serves up to 100 input positions. | `15` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
 | `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. The server declares `stateless`; an explicit value overrides it. | `stateless` |

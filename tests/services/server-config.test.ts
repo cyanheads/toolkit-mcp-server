@@ -20,6 +20,7 @@ describe('server environment configuration', () => {
       'TOOLKIT_GEO_BASE_URL',
       'TOOLKIT_GEO_CACHE_TTL_SECONDS',
       'TOOLKIT_GEO_RATE_LIMIT_PER_MIN',
+      'TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN',
     ]) {
       vi.stubEnv(key, value);
     }
@@ -31,6 +32,7 @@ describe('server environment configuration', () => {
       geoBaseUrl: 'http://ip-api.com',
       geoCacheTtlSeconds: 3600,
       geoRateLimitPerMin: 45,
+      geoBatchRateLimitPerMin: 15,
     });
   });
 

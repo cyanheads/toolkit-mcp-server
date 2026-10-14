@@ -63,6 +63,14 @@ const ServerConfigSchema = z.object({
     .describe(
       'Max geolocation requests per minute; excess requests are rejected with a retryable rate-limit error. Default 45 matches the ip-api free tier.',
     ),
+  geoBatchRateLimitPerMin: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(15)
+    .describe(
+      'Max batch geolocation requests per minute; excess requests fail immediately. Default 15.',
+    ),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -79,6 +87,7 @@ export function getServerConfig(): ServerConfig {
     geoBaseUrl: 'TOOLKIT_GEO_BASE_URL',
     geoCacheTtlSeconds: 'TOOLKIT_GEO_CACHE_TTL_SECONDS',
     geoRateLimitPerMin: 'TOOLKIT_GEO_RATE_LIMIT_PER_MIN',
+    geoBatchRateLimitPerMin: 'TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN',
   });
   return _config;
 }

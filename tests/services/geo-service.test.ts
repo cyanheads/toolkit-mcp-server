@@ -492,7 +492,7 @@ describe('GeoService', () => {
     expect(cached.org?.length).toBe(GEO_FIELD_MAX_LENGTH);
   });
 
-  it('bounds the provider fail-envelope message before it reaches the client', async () => {
+  it('omits provider fail-envelope prose before it reaches the client', async () => {
     const oversized = `reserved range \u000a\u000a# Injected heading ${'C'.repeat(GEO_FIELD_MAX_LENGTH * 4)}`;
     vi.stubGlobal(
       'fetch',
@@ -505,6 +505,8 @@ describe('GeoService', () => {
     const error = (await lookup('45.33.32.156').catch((e: unknown) => e)) as { message: string };
     expect(error.message).not.toMatch(/[\u0000-\u001f\u007f]/);
     expect(error.message.length).toBeLessThan(GEO_FIELD_MAX_LENGTH * 2);
+    expect(error.message).not.toContain('reserved range');
+    expect(error.message).not.toContain('Injected heading');
   });
 
   it('bounds the asn fallback path when `as` does not match the AS<digits> pattern', async () => {

@@ -45,7 +45,8 @@
         "TOOLKIT_GEO_API_KEY": "${user_config.TOOLKIT_GEO_API_KEY}",
         "TOOLKIT_GEO_BASE_URL": "${user_config.TOOLKIT_GEO_BASE_URL}",
         "TOOLKIT_GEO_CACHE_TTL_SECONDS": "${user_config.TOOLKIT_GEO_CACHE_TTL_SECONDS}",
-        "TOOLKIT_GEO_RATE_LIMIT_PER_MIN": "${user_config.TOOLKIT_GEO_RATE_LIMIT_PER_MIN}"
+        "TOOLKIT_GEO_RATE_LIMIT_PER_MIN": "${user_config.TOOLKIT_GEO_RATE_LIMIT_PER_MIN}",
+        "TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN": "${user_config.TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN}"
       }
     }
   },
@@ -92,6 +93,13 @@
       "type": "string",
       "required": false,
       "default": "3600"
+    },
+    "TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN": {
+      "title": "Batch geolocation rate limit (per minute)",
+      "description": "Independent batch endpoint budget. Each request serves up to 100 input positions; excess requests fail immediately with wait and recovery guidance.",
+      "type": "string",
+      "required": false,
+      "default": "15"
     },
     "TOOLKIT_GEO_RATE_LIMIT_PER_MIN": {
       "title": "Geolocation rate limit (per minute)",
