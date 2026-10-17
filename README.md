@@ -29,7 +29,7 @@
 
 ## Overview
 
-Developer utilities that run in-process: generate identifiers, QR codes, and cryptographic digests, and encode or decode values. Geolocating a public IP or hostname is the one outbound call, and two host-diagnostic tools stay off unless enabled. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Everyday developer utilities: generate IDs, QR codes, and hashes, encode and decode values, and geolocate a public IP or hostname. Everything but the geolocation lookup runs locally.
 
 ### Tools
 
@@ -78,10 +78,10 @@ Developer utilities that run in-process: generate identifiers, QR codes, and cry
 ### `toolkit_geolocate_ip` <sub>tool</sub>
 
 - `target` is an IPv4/IPv6 address or a dotted hostname, DNS-resolved first; private or reserved addresses fail as `private_target`, unresolvable hostnames as `unresolvable_host`
-- Alternatively supply `targets` (up to 1000 entries): the first 100 input positions return ordered `results`, including duplicate positions and per-target errors with recovery; `failedCount` counts processed failures and `unprocessedTargets` lists every remainder to resubmit. Supply one nonblank `target` or one nonempty `targets` array.
+- Or send `targets` (up to 1000) instead, never both: the first 100 return ordered `results` with per-target errors, `failedCount` counts failures, and `unprocessedTargets` lists the rest to resubmit
 - Returns `country`, `countryCode`, `region`, `city`, `latitude`/`longitude`, `asn`, `org`, and `timezone` with `resolvedIp` and `source`; a `true` in `proxy`, `hosting`, or `mobile` means the location describes infrastructure, not a person
-- Keyless ip-api free tier over plaintext HTTP by default (`TOOLKIT_GEO_BASE_URL`, `TOOLKIT_GEO_API_KEY`); results are cached per resolved IP and provider calls are rate-limited
-- Single and batch request budgets are independent (`TOOLKIT_GEO_RATE_LIMIT_PER_MIN=45`, `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN=15`). Quota refusals report `rate_limited`, seconds to wait, and recovery; cache hits stay free. Provider 429 is never retried, and endpoint cooldowns honor `X-Ttl` (60 seconds if invalid, capped at one hour).
+- Uses the keyless ip-api free tier over plaintext HTTP by default (`TOOLKIT_GEO_BASE_URL`, `TOOLKIT_GEO_API_KEY`); results are cached per resolved IP
+- Single and batch lookups have separate rate limits (`TOOLKIT_GEO_RATE_LIMIT_PER_MIN=45`, `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN=15`); refusals report `rate_limited` with seconds to wait, and cache hits stay free
 
 ---
 
@@ -240,11 +240,11 @@ All variables are optional.
 | `TOOLKIT_GEO_API_KEY` | API key for the geolocation endpoint, if it requires one. | none |
 | `TOOLKIT_GEO_BASE_URL` | Base URL for an ip-api-compatible endpoint. The keyless default is plaintext HTTP; ip-api's HTTPS endpoint needs a paid key. | `http://ip-api.com` |
 | `TOOLKIT_GEO_CACHE_TTL_SECONDS` | In-memory geolocation cache TTL in seconds. | `3600` |
-| `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation provider requests per minute; cache hits don't count, and excess requests fail with a retryable rate-limit error. | `45` |
-| `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN` | Independent batch provider requests per minute; each request serves up to 100 input positions. | `15` |
+| `TOOLKIT_GEO_RATE_LIMIT_PER_MIN` | Max geolocation requests per minute; cache hits don't count. | `45` |
+| `TOOLKIT_GEO_BATCH_RATE_LIMIT_PER_MIN` | Max batch geolocation requests per minute, counted separately. | `15` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
-| `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. The server declares `stateless`; an explicit value overrides it. | `stateless` |
+| `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
