@@ -314,13 +314,19 @@ export class GeoService {
       // validation error. The target passed the private-range guard, so it is a
       // public-format address — the recovery hint must NOT imply the caller
       // failed to pass a public IP (it reads oddly for e.g. TEST-NET ranges).
-      throw validationError(`Geolocation provider could not locate ${resolvedIp}.`, {
-        reason: 'private_target',
-        retryable: false,
-        recovery: {
-          hint: 'This address has no public geolocation (it is reserved, unrouted, or bogon). Use a routable public IP.',
+      // As in privateTarget, a hostname's resolved address is not named.
+      throw validationError(
+        isIP(target) !== 0
+          ? `Geolocation provider could not locate ${target}.`
+          : `${target} resolves to an address the geolocation provider could not locate.`,
+        {
+          reason: 'private_target',
+          retryable: false,
+          recovery: {
+            hint: 'This address has no public geolocation (it is reserved, unrouted, or bogon). Use a routable public IP.',
+          },
         },
-      });
+      );
     }
 
     const result = this.normalize(raw, target, resolvedIp);

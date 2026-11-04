@@ -344,6 +344,35 @@ describe('GeoService', () => {
     expect(hint).toMatch(/no public geolocation/i);
   });
 
+  it('names a hostname, never its resolved address, when the provider cannot locate it', async () => {
+    lookupMock.mockResolvedValue({ address: '45.33.32.156', family: 4 });
+    const fail = { status: 'fail', message: 'reserved range', query: '45.33.32.156' };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        Response.json(new URL(url).pathname === '/batch' ? [fail] : fail),
+      ),
+    );
+    const message =
+      'unlocatable.example.com resolves to an address the geolocation provider could not locate.';
+    await expect(lookup('unlocatable.example.com')).rejects.toMatchObject({
+      message,
+      data: { reason: 'private_target', retryable: false },
+    });
+    // The batch path words the same failure the same way.
+    const batch = await getGeoService().lookupBatch(
+      ['unlocatable.example.com'],
+      createMockContext(),
+    );
+    expect(batch.results).toEqual([
+      {
+        target: 'unlocatable.example.com',
+        error: expect.objectContaining({ reason: 'private_target', message }),
+      },
+    ]);
+    expect(JSON.stringify(batch)).not.toContain('45.33.32.156');
+  });
+
   it('caches by resolved IP — a repeat lookup does not re-call the provider', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(FULL_PAYLOAD));
     vi.stubGlobal('fetch', fetchMock);
@@ -629,10 +658,10 @@ describe('GeoService', () => {
   describe('bidirectional formatting controls in provider strings', () => {
     /** Every embedding, override, and isolate control (U+202A–U+202E, U+2066–U+2069). */
     const BIDI = /[\u{202A}-\u{202E}\u{2066}-\u{2069}]/u;
-    /** Registry text carrying each kind of control; the org's override displays "bank.com" reversed. */
+    /** Registry text carrying each kind of control; the org's override would display "Corp" reversed. */
     const BIDI_PAYLOAD = {
       status: 'success',
-      org: 'Evil Corp \u{202E}bank.com\u{202C}',
+      org: 'Acme \u{202E}Corp\u{202C}',
       isp: '\u{2067}Cloud\u{2069}\u{2066}flare\u{2069}',
       as: 'AS13335 Cloud\u{202A}flare\u{202B}, Inc.\u{202D}\u{2068}',
       asname: 'CLOUDFLARE\u{202E}NET',
@@ -640,7 +669,7 @@ describe('GeoService', () => {
       country: '\u{200F}Israel',
     };
     const STRIPPED = {
-      org: 'Evil Corp bank.com',
+      org: 'Acme Corp',
       isp: 'Cloudflare',
       asn: 'AS13335',
       asHolder: 'Cloudflare, Inc.',
