@@ -25,6 +25,7 @@ import { geolocateIpTool } from '@/mcp-server/tools/definitions/geolocate-ip.too
 import { hashValueTool } from '@/mcp-server/tools/definitions/hash-value.tool.js';
 import { initGeoService } from '@/services/geo/geo-service.js';
 import { initNetDiagService } from '@/services/network/net-diag-service.js';
+import { readCommonMark } from '../helpers/commonmark.js';
 
 /** Every tool this server can register — the five always-on plus the two gated. */
 const ALL_TOOLS: AnyToolDefinition[] = [
@@ -80,6 +81,12 @@ describe('tool wire contract', () => {
       'sri_unsupported_algorithm',
     ],
     [hashValueTool, { value: 'xz', inputEncoding: 'hex' }, 'invalid_input_encoding'],
+    [
+      hashValueTool,
+      { value: 'abc', secret: 'not hex', secretEncoding: 'hex' },
+      'invalid_secret_encoding',
+    ],
+    [hashValueTool, { value: 'abc', secret: 'k', digestEncoding: 'sri' }, 'sri_with_secret'],
     [generateQrTool, { data: 'x'.repeat(2953), errorCorrection: 'M' }, 'data_too_large'],
     [
       generateQrTool,
@@ -105,9 +112,10 @@ describe('tool wire contract', () => {
           }),
         })
         .parse(result.structuredContent);
+      // Error text renders Markdown-escaped; the parse reads it back as structuredContent carries it.
       const text = result.content
         .filter((block) => block.type === 'text')
-        .map((block) => block.text)
+        .map((block) => readCommonMark(block.text))
         .join('\n');
       expect(text).toContain(error.message);
       expect(text).toContain(error.data.recovery.hint);

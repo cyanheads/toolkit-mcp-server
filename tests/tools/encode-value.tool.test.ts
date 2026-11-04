@@ -11,6 +11,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import { encodeValueTool } from '@/mcp-server/tools/definitions/encode-value.tool.js';
+import { readCommonMark } from '../helpers/commonmark.js';
 
 const run = (args: unknown) =>
   encodeValueTool.handler(
@@ -186,6 +187,7 @@ describe('toolkit_encode_value byte-preserving decode', () => {
   it.each([
     ['hex', PNG_MAGIC_HEX],
     ['base64', 'iVBORw0KGgo='],
+    ['base64url', 'iVBORw0KGgo'],
   ] as const)(
     'outputEncoding %s returns the exact PNG signature bytes',
     async (outputEncoding, expected) => {
@@ -250,7 +252,7 @@ describe('toolkit_encode_value byte-preserving decode', () => {
   });
 
   it('round-trips an empty value through every outputEncoding', async () => {
-    for (const outputEncoding of ['utf8', 'hex', 'base64'] as const) {
+    for (const outputEncoding of ['utf8', 'hex', 'base64', 'base64url'] as const) {
       const result = await run({
         operation: 'decode',
         encoding: 'base64',
@@ -387,9 +389,10 @@ describe('toolkit_encode_value byte-preserving decode', () => {
       expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
       expect(error.data.reason).toBe(reason);
       expect(error.data.recovery.hint).toMatch(hintPattern);
+      // Error text renders Markdown-escaped; the parse reads it back as structuredContent carries it.
       const text = result.content
         .filter((block) => block.type === 'text')
-        .map((block) => block.text)
+        .map((block) => readCommonMark(block.text))
         .join('\n');
       expect(text).toContain(error.message);
       expect(text).toContain(error.data.recovery.hint);
@@ -417,5 +420,80 @@ describe('toolkit_encode_value byte-preserving decode', () => {
       .join('\n');
     expect(text).toContain(PNG_MAGIC_HEX);
     expect(text).toContain('hex');
+  });
+});
+
+/** sha256("hello"), as hex and as unpadded base64url. */
+const HELLO_SHA256_HEX = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+const HELLO_SHA256_BASE64URL = 'LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ';
+
+describe('toolkit_encode_value base64url outputEncoding', () => {
+  it('transcodes a hex digest to unpadded base64url on both surfaces', async () => {
+    const result = await runToolContract(encodeValueTool, {
+      operation: 'decode',
+      encoding: 'hex',
+      value: HELLO_SHA256_HEX,
+      outputEncoding: 'base64url',
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      encoding: 'hex',
+      operation: 'decode',
+      outputEncoding: 'base64url',
+      result: HELLO_SHA256_BASE64URL,
+    });
+    expect(HELLO_SHA256_BASE64URL).toHaveLength(43);
+    const text = result.content
+      .filter((block) => block.type === 'text')
+      .map((block) => readCommonMark(block.text))
+      .join('\n');
+    expect(text).toBe(
+      `⟨strong⟩Decoded⟨/strong⟩ (operation: decode, encoding: hex, outputEncoding: base64url):\n\n⟨fence:${HELLO_SHA256_BASE64URL}⟩`,
+    );
+  });
+
+  it.each([
+    ['fb', '-w'],
+    ['fbff', '-_8'],
+  ])('renders hex %s with the URL-safe alphabet and no padding as %s', async (value, expected) => {
+    const result = await run({
+      operation: 'decode',
+      encoding: 'hex',
+      value,
+      outputEncoding: 'base64url',
+    });
+    expect(result.result).toBe(expected);
+  });
+
+  it.each([
+    ['base64', 'LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ='],
+    ['base64url', HELLO_SHA256_BASE64URL],
+    // Every byte percent-escaped: %2c%f2%4d…
+    ['url', HELLO_SHA256_HEX.replace(/../g, '%$&')],
+  ] as const)('decodes a %s source to base64url', async (encoding, value) => {
+    const result = await run({ operation: 'decode', encoding, value, outputEncoding: 'base64url' });
+    expect(result).toEqual({
+      encoding,
+      operation: 'decode',
+      outputEncoding: 'base64url',
+      result: HELLO_SHA256_BASE64URL,
+    });
+  });
+
+  it('rejects outputEncoding base64url on encode instead of ignoring it', () => {
+    expect(
+      reasonOf({ operation: 'encode', encoding: 'hex', value: 'abc', outputEncoding: 'base64url' }),
+    ).toBe('output_encoding_not_applicable');
+  });
+
+  it('advertises base64url among the outputEncoding values on input and output', () => {
+    const input = z.toJSONSchema(encodeValueTool.input) as {
+      properties: Record<string, { enum?: unknown[] }>;
+    };
+    const output = z.toJSONSchema(encodeValueTool.output) as {
+      properties: Record<string, { enum?: unknown[] }>;
+    };
+    expect(input.properties.outputEncoding?.enum).toEqual(['utf8', 'hex', 'base64', 'base64url']);
+    expect(output.properties.outputEncoding?.enum).toEqual(['utf8', 'hex', 'base64', 'base64url']);
   });
 });

@@ -20,6 +20,7 @@ import {
   generateQrTool,
   QR_MAX_PNG_EDGE_PX,
 } from '@/mcp-server/tools/definitions/generate-qr.tool.js';
+import { readCommonMark } from '../helpers/commonmark.js';
 
 /** Run the handler on a caller-visible context so content blocks can be read. */
 const runWith = async (args: unknown) => {
@@ -436,6 +437,7 @@ describe('toolkit_generate_qr summary text and byte counts', () => {
     expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
     expect(error.data.reason).toBe('data_too_large');
     expect(error.message).toContain('3000 bytes');
-    expect(textOf(result.content)).toContain(error.data.recovery.hint);
+    // Error text renders Markdown-escaped; the parse reads it back as structuredContent carries it.
+    expect(readCommonMark(textOf(result.content))).toContain(error.data.recovery.hint);
   });
 });

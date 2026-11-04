@@ -8,9 +8,13 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { markdown } from '@cyanheads/mcp-ts-core/utils';
+import { type BinaryEncoding, decodeStrict } from '@/utils/strict-decode.js';
 
 type Encoding = 'base64' | 'base64url' | 'hex' | 'url';
-type OutputEncoding = 'utf8' | 'hex' | 'base64';
+
+/** How decoded bytes are returned: UTF-8 text, or the raw bytes re-encoded (base64url unpadded). */
+const OUTPUT_ENCODINGS = ['utf8', 'hex', 'base64', 'base64url'] as const;
+type OutputEncoding = (typeof OUTPUT_ENCODINGS)[number];
 
 /**
  * Fatal, so bytes that are not UTF-8 throw instead of becoming U+FFFD, and
@@ -55,21 +59,10 @@ function percentDecodeBytes(value: string): Buffer {
  * stripped first, so line-wrapped (MIME, PEM) and spaced input decodes; throws
  * on anything still malformed.
  */
-function decodeBytes(value: string, encoding: Exclude<Encoding, 'url'>): Buffer {
-  const compact = value.replace(/\s+/g, '');
-  if (encoding === 'hex') {
-    if (!/^[0-9a-fA-F]*$/.test(compact) || compact.length % 2 !== 0) {
-      throw new RangeError('not valid hex');
-    }
-    return Buffer.from(compact, 'hex');
-  }
-  // base64 / base64url — validate the alphabet, then round-trip to confirm.
-  const alphabet = encoding === 'base64url' ? /^[A-Za-z0-9_-]*={0,2}$/ : /^[A-Za-z0-9+/]*={0,2}$/;
-  if (!alphabet.test(compact)) throw new RangeError(`not valid ${encoding}`);
-  const buf = Buffer.from(compact, encoding);
-  const reencoded = buf.toString(encoding).replace(/=+$/, '');
-  if (reencoded !== compact.replace(/=+$/, '')) throw new RangeError(`not valid ${encoding}`);
-  return buf;
+function decodeBytes(value: string, encoding: BinaryEncoding): Buffer {
+  const bytes = decodeStrict(value.replace(/\s+/g, ''), encoding);
+  if (!bytes) throw new RangeError(`not valid ${encoding}`);
+  return bytes;
 }
 
 /**
@@ -102,7 +95,7 @@ function decode(value: string, encoding: Encoding, outputEncoding: OutputEncodin
 export const encodeValueTool = tool('toolkit_encode_value', {
   title: 'toolkit-mcp-server: encode value',
   description:
-    'Encode or decode a value across base64, base64url, hex, or URL (percent) encoding, in either direction. Set operation to "encode" to transform raw UTF-8 text into the chosen encoding, or "decode" to recover the original bytes from an encoded value. Decoded bytes come back as UTF-8 text by default; set outputEncoding to "hex" or "base64" to receive them re-encoded instead, which is lossless for binary data and transcodes between encodings (a base64 digest to hex, for example). Decoding never substitutes replacement characters: bytes that are not valid UTF-8 text are reported as a recoverable error that points at outputEncoding. Whitespace in hex, base64, and base64url values is ignored, so line-wrapped MIME bodies and PEM bodies decode as-is (drop PEM\'s -----BEGIN/END----- lines, which are not base64). base64url uses the URL-safe alphabet (- and _ instead of + and /); url applies encodeURIComponent and percent-decoding. A value that is malformed for the chosen encoding is reported as a recoverable error, not a silent best-effort.',
+    'Encode or decode a value across base64, base64url, hex, or URL (percent) encoding, in either direction. Set operation to "encode" to transform raw UTF-8 text into the chosen encoding, or "decode" to recover the original bytes from an encoded value. Decoded bytes come back as UTF-8 text by default; set outputEncoding to "hex", "base64", or "base64url" (unpadded, the form JWK members, JWS signatures, and PKCE code challenges use) to receive them re-encoded instead, which is lossless for binary data and transcodes between encodings (a base64 digest to hex, or hex key bytes to base64url, for example). Decoding never substitutes replacement characters: bytes that are not valid UTF-8 text are reported as a recoverable error that points at outputEncoding. Whitespace in hex, base64, and base64url values is ignored, so line-wrapped MIME bodies and PEM bodies decode as-is (drop PEM\'s -----BEGIN/END----- lines, which are not base64). base64url uses the URL-safe alphabet (- and _ instead of + and /); url applies encodeURIComponent and percent-decoding. A value that is malformed for the chosen encoding is reported as a recoverable error, not a silent best-effort.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
     operation: z
@@ -119,10 +112,10 @@ export const encodeValueTool = tool('toolkit_encode_value', {
         'The value to transform — raw text for encode, an encoded string for decode. Whitespace is ignored when decoding hex, base64, or base64url; a url value is taken literally.',
       ),
     outputEncoding: z
-      .enum(['utf8', 'hex', 'base64'])
+      .enum(OUTPUT_ENCODINGS)
       .optional()
       .describe(
-        'Decode only: how the recovered bytes are returned. utf8 (used when omitted) returns text and fails when the bytes are not valid UTF-8; hex and base64 return the raw bytes re-encoded, losslessly. Rejected when operation is "encode".',
+        'Decode only: how the recovered bytes are returned. utf8 (used when omitted) returns text and fails when the bytes are not valid UTF-8; hex, base64, and base64url (unpadded) return the raw bytes re-encoded, losslessly. Rejected when operation is "encode".',
       ),
   }),
   /**
@@ -137,15 +130,15 @@ export const encodeValueTool = tool('toolkit_encode_value', {
       .describe('The encoding that was applied.'),
     operation: z.enum(['encode', 'decode']).describe('The operation that was performed.'),
     outputEncoding: z
-      .enum(['utf8', 'hex', 'base64'])
+      .enum(OUTPUT_ENCODINGS)
       .optional()
       .describe(
-        'How result renders the decoded bytes: utf8 text, hex, or base64. Present for operation "decode".',
+        'How result renders the decoded bytes: utf8 text, hex, base64, or unpadded base64url. Present for operation "decode".',
       ),
     result: z
       .string()
       .describe(
-        'The transformed value: encoded text for encode; for decode, the recovered bytes as UTF-8 text, hex, or base64 per outputEncoding.',
+        'The transformed value: encoded text for encode; for decode, the recovered bytes as UTF-8 text, hex, base64, or unpadded base64url per outputEncoding.',
       ),
   }),
 
