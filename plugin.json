@@ -1,0 +1,33 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "toolkit-mcp-server",
+  "version": "2.3.3",
+  "description": "Generate random IDs, QR codes, and hashes, encode and decode values, and geolocate IPs, plus gated network and system diagnostics, via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/toolkit-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/toolkit-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "developer-tools",
+    "utilities",
+    "uuid",
+    "ulid",
+    "qr-code",
+    "hashing",
+    "encoding",
+    "base64",
+    "ip-geolocation",
+    "network-diagnostics"
+  ]
+}
