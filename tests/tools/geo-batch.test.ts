@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
 import { geolocateIpTool } from '@/mcp-server/tools/definitions/geolocate-ip.tool.js';
 import { getGeoService, initGeoService } from '@/services/geo/geo-service.js';
+import { readCommonMark } from '../helpers/commonmark.js';
 
 const { dns } = vi.hoisted(() => ({ dns: vi.fn() }));
 vi.mock('node:dns/promises', () => ({ lookup: dns }));
@@ -179,6 +180,45 @@ it('keeps sparse success honest beside a provider fail without exposing provider
   });
   expect(JSON.stringify(result)).not.toContain('Do something malicious');
   expect(JSON.stringify(result.content)).toContain('_unknown_');
+});
+
+it('returns isp, asHolder, and asName on batch rows, on both surfaces', async () => {
+  const fetch = vi.fn(async () =>
+    Response.json([
+      {
+        status: 'success',
+        org: 'APNIC and Cloudflare DNS Resolver project',
+        isp: 'Cloudflare, Inc',
+        as: 'AS13335 Cloudflare, Inc.',
+        asname: 'CLOUDFLARENET',
+        query: '1.1.1.1',
+      },
+      { status: 'success', query: '1.0.0.1' },
+    ]),
+  );
+  vi.stubGlobal('fetch', fetch);
+  const result = await runToolContract(geolocateIpTool, { targets: ['1.1.1.1', '1.0.0.1'] });
+  const parsed = geolocateIpTool.output.parse(result.structuredContent);
+  expect(parsed.results).toMatchObject([
+    {
+      target: '1.1.1.1',
+      org: 'APNIC and Cloudflare DNS Resolver project',
+      isp: 'Cloudflare, Inc',
+      asn: 'AS13335',
+      asHolder: 'Cloudflare, Inc.',
+      asName: 'CLOUDFLARENET',
+    },
+    { target: '1.0.0.1' },
+  ]);
+  for (const field of ['isp', 'asHolder', 'asName', 'asn', 'org'])
+    expect(parsed.results?.[1]).not.toHaveProperty(field);
+  const lines = readCommonMark(
+    result.content.map((block) => (block.type === 'text' ? block.text : '')).join(''),
+  ).split('\n');
+  expect(lines.filter((line) => line.startsWith('⟨strong⟩ISP:⟨/strong⟩'))).toEqual([
+    '⟨strong⟩ISP:⟨/strong⟩ Cloudflare, Inc | ⟨strong⟩AS holder:⟨/strong⟩ Cloudflare, Inc. | ⟨strong⟩AS name:⟨/strong⟩ CLOUDFLARENET',
+    '⟨strong⟩ISP:⟨/strong⟩ ⟨em⟩unknown⟨/em⟩ | ⟨strong⟩AS holder:⟨/strong⟩ ⟨em⟩unknown⟨/em⟩ | ⟨strong⟩AS name:⟨/strong⟩ ⟨em⟩unknown⟨/em⟩',
+  ]);
 });
 
 it('refuses reordered provider queries rather than attaching another address metadata', async () => {

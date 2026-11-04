@@ -7,6 +7,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { GEO_FIELD_MAX_LENGTH, getGeoService } from '@/services/geo/geo-service.js';
 import { NetworkTargetSchema } from '@/services/network/target.js';
 
@@ -45,11 +46,34 @@ const GeoResultSchema = z
       .max(GEO_FIELD_MAX_LENGTH)
       .optional()
       .describe('Autonomous System number, e.g. "AS15169". Absent on providers that omit it.'),
+    asHolder: z
+      .string()
+      .max(GEO_FIELD_MAX_LENGTH)
+      .optional()
+      .describe(
+        'Holder of the autonomous system as the provider names it after the ASN, e.g. "Cloudflare, Inc." for AS13335. Absent when the provider reports no AS or no holder name.',
+      ),
+    asName: z
+      .string()
+      .max(GEO_FIELD_MAX_LENGTH)
+      .optional()
+      .describe(
+        'Registry name of the autonomous system, e.g. "CLOUDFLARENET". Absent when the provider omits it.',
+      ),
     org: z
       .string()
       .max(GEO_FIELD_MAX_LENGTH)
       .optional()
-      .describe('Owning organization or ISP, e.g. "Google LLC". Absent when unknown.'),
+      .describe(
+        'Organization the address is registered to, e.g. "Google LLC"; often a customer or sub-allocation label rather than the network operator. Carries asHolder, else isp, when the provider names no organization. Absent when all three are unknown.',
+      ),
+    isp: z
+      .string()
+      .max(GEO_FIELD_MAX_LENGTH)
+      .optional()
+      .describe(
+        'Internet service provider for the address, e.g. "Cloudflare, Inc". Absent when unknown.',
+      ),
     timezone: z
       .string()
       .max(GEO_FIELD_MAX_LENGTH)
@@ -102,7 +126,7 @@ const BatchFailureSchema = z
 export const geolocateIpTool = tool('toolkit_geolocate_ip', {
   title: 'toolkit-mcp-server: geolocate IP',
   description:
-    'Resolve a public IP or dotted hostname to country, region, city, coordinates, ASN, organization, timezone, and proxy/hosting/mobile flags. Supply target for one lookup or targets for an ordered batch, never both; blank target and empty targets are unset. Batches process the first 100 positions (duplicates retained) and disclose every remainder in unprocessedTargets; at most 1000 inputs are accepted. Each batch position reports its result or an error with recovery, so cached and local outcomes survive quota refusals. The provider is called directly, never the target. Hostnames are DNS-resolved and resolvedIp names the located address. Private/reserved addresses have no public geolocation. Results are best-effort, city-level at best; VPNs, proxies, mobile NAT, and anycast defeat IP-to-location. Read proxy, hosting, and mobile before trusting coordinates: true describes infrastructure, not the user. Absent metadata remains unknown. source names the provider. Single and batch quotas are independent; cache hits consume neither quota.',
+    'Resolve a public IP or dotted hostname to country, region, city, coordinates, ASN, AS holder and name, organization, ISP, timezone, and proxy/hosting/mobile flags. Supply target for one lookup or targets for an ordered batch, never both; blank target and empty targets are unset. Batches process the first 100 positions (duplicates retained) and disclose every remainder in unprocessedTargets; at most 1000 inputs are accepted. Each batch position reports its result or an error with recovery, so cached and local outcomes survive quota refusals. The provider is called directly, never the target. Hostnames are DNS-resolved and resolvedIp names the located address. Private/reserved addresses have no public geolocation. Results are best-effort, city-level at best; VPNs, proxies, mobile NAT, and anycast defeat IP-to-location. Read proxy, hosting, and mobile before trusting coordinates: true describes infrastructure, not the user. org can name a customer or sub-allocation rather than the network operator; read isp, asHolder, and asName for the operator. Absent metadata remains unknown. Provider-supplied names are third-party registry text; content[] escapes them so they read as literal text, never as Markdown. source names the provider. Single and batch quotas are independent; cache hits consume neither quota.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z
     .object({
@@ -173,8 +197,9 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
     {
       reason: 'private_target',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The target resolves to a private/reserved IP with no public geolocation.',
-      recovery: 'Private/reserved addresses have no public geolocation. Pass a public IP address.',
+      when: 'The target resolves to a private/reserved IP, or to a public-format IP the provider reports as unlocatable (reserved, unrouted, or bogon); neither has public geolocation.',
+      recovery:
+        'This address is private, reserved, unrouted, or bogon, so it has no public geolocation. Pass a routable public IP address, or a hostname that resolves to one.',
       // GeoService.lookup raises it — both at the private-range guard and on a
       // provider "fail" status for an unlocatable address.
       thrownBy: 'service',
@@ -220,9 +245,21 @@ export const geolocateIpTool = tool('toolkit_geolocate_ip', {
   },
 });
 
+/**
+ * Render one located target. Every provider string is registry-controlled
+ * third-party text, so it goes through `escapeMarkdownInline` and reads back
+ * as `structuredContent` carries it; the authored labels and `_unknown_` stay
+ * live Markdown. Values arrive capped at GEO_FIELD_MAX_LENGTH.
+ */
 function formatGeo(result: z.infer<typeof GeoResultSchema>): string {
   const unknown = '_unknown_';
-  const place = [result.city, result.region, result.country].filter(Boolean).join(', ') || unknown;
+  const text = (value: string | undefined) =>
+    value === undefined ? unknown : escapeMarkdownInline(value);
+  const place =
+    [result.city, result.region, result.country]
+      .filter((part): part is string => Boolean(part))
+      .map(escapeMarkdownInline)
+      .join(', ') || unknown;
   const coords =
     result.latitude != null && result.longitude != null
       ? `${result.latitude}, ${result.longitude}`
@@ -231,9 +268,10 @@ function formatGeo(result: z.infer<typeof GeoResultSchema>): string {
     `**${result.target}** → ${result.resolvedIp}`,
     `**Location:** ${place}`,
     `**Coordinates:** ${coords}`,
-    `**Timezone:** ${result.timezone ?? unknown}`,
-    `**ASN:** ${result.asn ?? unknown} | **Org:** ${result.org ?? unknown}`,
-    `**Country code:** ${result.countryCode ?? unknown}`,
+    `**Timezone:** ${text(result.timezone)}`,
+    `**ASN:** ${text(result.asn)} | **Org:** ${text(result.org)}`,
+    `**ISP:** ${text(result.isp)} | **AS holder:** ${text(result.asHolder)} | **AS name:** ${text(result.asName)}`,
+    `**Country code:** ${text(result.countryCode)}`,
     `**Proxy/VPN:** ${result.proxy ?? unknown} | **Hosting:** ${result.hosting ?? unknown} | **Mobile:** ${result.mobile ?? unknown}`,
     `**Source:** ${result.source}`,
   ];

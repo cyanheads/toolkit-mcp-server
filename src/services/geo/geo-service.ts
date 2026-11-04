@@ -1,5 +1,5 @@
 /**
- * @fileoverview GeoService — the one external dependency. DNS-resolves a hostname
+ * @fileoverview GeoService — the always-on tools' one upstream. DNS-resolves a hostname
  * to an IP, calls the ip-api-compatible geolocation endpoint with retry/backoff,
  * bounds and strips the provider's strings, normalizes the sparse payload, and
  * caches by resolved IP under a hard entry cap. The private-range guard runs
@@ -43,6 +43,7 @@ type IpApiResponse = {
   org?: string;
   isp?: string;
   as?: string;
+  asname?: string;
   proxy?: boolean;
   hosting?: boolean;
   mobile?: boolean;
@@ -50,7 +51,7 @@ type IpApiResponse = {
 };
 
 const IP_API_FIELDS =
-  'status,message,country,countryCode,regionName,city,lat,lon,timezone,isp,org,as,proxy,hosting,mobile,query';
+  'status,message,country,countryCode,regionName,city,lat,lon,timezone,isp,org,as,asname,proxy,hosting,mobile,query';
 
 /**
  * The only implemented provider protocol. Reported as `source` and named in the
@@ -77,24 +78,53 @@ export const GEO_FIELD_MAX_LENGTH = 256;
  */
 const CONTROL_CHARS = /\p{Cc}+/gu;
 
+/**
+ * The bidirectional embedding, override, and isolate controls (U+202A–U+202E,
+ * U+2066–U+2069), which can make text display in an order other than the one
+ * it is stored in. The U+200E/U+200F marks are not among them.
+ */
+const BIDI_CONTROLS = /[\u{202A}-\u{202E}\u{2066}-\u{2069}]/gu;
+
 type CacheEntry = { result: GeoResult; expiresAt: number };
 
 /** Fixed key for the process-wide outbound geolocation throttle. */
 const RATE_LIMIT_KEY = 'geo-lookup';
 
 /**
- * Bound and strip one provider-supplied string. `org`, `isp`, and `as` come from
- * registry records the address holder controls, and the keyless ip-api tier is
- * plaintext HTTP, so these values are third-party text that lands verbatim in an
- * LLM's context. A control run collapses to a single space rather than vanishing,
- * so stripping cannot weld two words together. Returns `undefined` for an empty
- * result, preserving the no-fabrication rule for absent upstream fields.
+ * Bound and strip one provider-supplied string. `org`, `isp`, `as`, and
+ * `asname` come from registry records the address holder controls, and the
+ * keyless ip-api tier is plaintext HTTP, so these values are third-party text
+ * that lands verbatim in an LLM's context. Bidirectional embedding, override,
+ * and isolate controls are removed outright: they are invisible formatting,
+ * not separators, and can make a value display reordered. The left-to-right and
+ * right-to-left marks stay, since legitimate RTL names use them. A control
+ * run then collapses to a single space rather than vanishing, so stripping
+ * cannot weld two words together. The 256-character cap applies after both.
+ * Returns `undefined` for an empty result, preserving the no-fabrication rule
+ * for absent upstream fields.
  */
 function boundedField(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const cleaned = value.replace(CONTROL_CHARS, ' ').trim().slice(0, GEO_FIELD_MAX_LENGTH);
+  const cleaned = value
+    .replace(BIDI_CONTROLS, '')
+    .replace(CONTROL_CHARS, ' ')
+    .trim()
+    .slice(0, GEO_FIELD_MAX_LENGTH);
   return cleaned || undefined;
 }
+
+/**
+ * The `private_target` refusal. A hostname's resolved address is not named,
+ * since the server's resolver can return private answers the caller cannot
+ * see. An IP literal is the caller's own input.
+ */
+const privateTarget = (target: string) =>
+  validationError(
+    isIP(target) !== 0
+      ? `${target} is a private/reserved address, which has no public geolocation.`
+      : `${target} resolves to a private/reserved address, which has no public geolocation.`,
+    { reason: 'private_target' },
+  );
 
 /** Compare equivalent IPv6 spellings as well as literal IPv4 provider queries. */
 function sameIp(query: string, resolvedIp: string): boolean {
@@ -257,12 +287,7 @@ export class GeoService {
     const resolvedIp = await this.resolveTarget(target, ctx);
     ctx.signal.throwIfAborted();
 
-    if (isPrivateOrReservedIp(resolvedIp)) {
-      throw validationError(
-        `${target} resolves to private/reserved address ${resolvedIp}, which has no public geolocation.`,
-        { reason: 'private_target' },
-      );
-    }
+    if (isPrivateOrReservedIp(resolvedIp)) throw privateTarget(target);
 
     const cached = this.cache.get(resolvedIp);
     if (cached && cached.expiresAt > Date.now()) {
@@ -344,11 +369,7 @@ export class GeoService {
       try {
         const resolvedIp = await this.resolveTarget(target, ctx);
         ctx.signal.throwIfAborted();
-        if (isPrivateOrReservedIp(resolvedIp))
-          throw validationError(
-            `${target} resolves to private/reserved address ${resolvedIp}, which has no public geolocation.`,
-            { reason: 'private_target' },
-          );
+        if (isPrivateOrReservedIp(resolvedIp)) throw privateTarget(target);
         const cached = this.cache.get(resolvedIp);
         if (cached && cached.expiresAt > Date.now()) results.push({ ...cached.result, target });
         else {
@@ -416,7 +437,7 @@ export class GeoService {
    * Map the raw ip-api payload to GeoResult, omitting absent fields (never
    * fabricating). Every provider-supplied string passes through `boundedField`
    * first, so both the returned and the cached result carry bounded, stripped
-   * values — including the `asn` fallback, which is derived from the already
+   * values — including `asn` and `asHolder`, which are derived from the already
    * bounded `as` string rather than the raw one.
    */
   private normalize(raw: IpApiResponse, target: string, resolvedIp: string): GeoResult {
@@ -433,19 +454,22 @@ export class GeoService {
     if (typeof raw.lon === 'number') result.longitude = raw.lon;
     const timezone = boundedField(raw.timezone);
     if (timezone) result.timezone = timezone;
-    // ip-api's `as` is "AS15169 Google LLC" — split the ASN token from the org name.
+    // ip-api's `as` is "AS15169 Google LLC" — split the ASN token from the holder
+    // name. An `as` that doesn't open with AS<digits> is kept whole as the asn.
     const asField = boundedField(raw.as);
     if (asField) {
       const match = asField.match(/^(AS\d+)\s*(.*)$/);
       result.asn = match?.[1] ?? asField;
-      const orgFromAs = match?.[2]?.trim();
-      if (orgFromAs) result.org = orgFromAs;
+      const asHolder = match?.[2]?.trim();
+      if (asHolder) result.asHolder = asHolder;
     }
-    // Prefer the dedicated org field; fall back to isp; finally to the `as`-derived org.
-    const org = boundedField(raw.org);
+    const asName = boundedField(raw.asname);
+    if (asName) result.asName = asName;
     const isp = boundedField(raw.isp);
+    if (isp) result.isp = isp;
+    // `org` prefers the dedicated org field, then the AS holder, then isp.
+    const org = boundedField(raw.org) ?? result.asHolder ?? isp;
     if (org) result.org = org;
-    else if (isp && !result.org) result.org = isp;
     // Quality flags — absent when the provider does not report them, so the model
     // can tell "not a proxy" from "the provider did not say".
     if (typeof raw.proxy === 'boolean') result.proxy = raw.proxy;

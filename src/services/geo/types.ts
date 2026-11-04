@@ -25,7 +25,16 @@ export type GeoResult = {
   longitude?: number;
   /** Autonomous System number, e.g. "AS15169". */
   asn?: string;
-  /** Owning organization, e.g. "Google LLC". */
+  /** Holder name that follows the ASN in the provider's AS string, e.g. "Cloudflare, Inc.". */
+  asHolder?: string;
+  /** Registry name of the AS, e.g. "CLOUDFLARENET". */
+  asName?: string;
+  /** Internet service provider, e.g. "Cloudflare, Inc". */
+  isp?: string;
+  /**
+   * Registered organization, e.g. "Google LLC" — often a customer or
+   * sub-allocation label. Falls back to the AS holder, then the ISP.
+   */
   org?: string;
   /** IANA timezone, e.g. "America/Los_Angeles". */
   timezone?: string;
