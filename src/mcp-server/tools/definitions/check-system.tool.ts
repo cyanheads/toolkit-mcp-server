@@ -2,17 +2,20 @@
  * @fileoverview toolkit_check_system — GATED, Node-only host system facts:
  * OS, CPU, memory, load average, or network interfaces. Registered only when
  * TOOLKIT_ENABLE_SYSTEM_INFO=true; absent from tools/list otherwise. STRICTLY
- * READ-ONLY — reads os/process, never mutates host state. Reports the SERVER
- * host (not the client), so it is meaningful only on a local/self-hosted
- * deployment; gated off by default because it discloses host specs and
- * internal interface addresses.
+ * READ-ONLY — reads os/process, the cgroup memory-usage file under a container
+ * limit, and (under Bun on macOS) the `vm_stat` page counters; never mutates
+ * host state. Reports the SERVER host (not the client), so it is meaningful
+ * only on a local/self-hosted deployment; gated off by default because it
+ * discloses host specs and internal interface addresses.
  * @module mcp-server/tools/definitions/check-system.tool
  */
 
+import { type ExecFileException, execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import process from 'node:process';
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 
 /** Current memory use of this process's cgroup — v2 first, then the v1 hierarchy. */
 const CGROUP_USAGE_FILES = [
@@ -32,20 +35,103 @@ function readCgroupUsage(): number | undefined {
   return;
 }
 
+/** macOS page statistics, at a fixed path so no PATH lookup can substitute another binary. */
+const VM_STAT_PATH = '/usr/bin/vm_stat';
+
+/** A backstop for a hung `vm_stat`, which normally prints within milliseconds. */
+const VM_STAT_TIMEOUT_MS = 5000;
+
+/** The page counts libuv's darwin `uv_get_available_memory()` sums; speculative pages are not among them. */
+const VM_STAT_AVAILABLE_COUNTS = [
+  /^Pages free: +(\d+)\.$/m,
+  /^Pages inactive: +(\d+)\.$/m,
+  /^Pages purgeable: +(\d+)\.$/m,
+];
+
+/**
+ * (free + inactive + purgeable pages) × the page size the `vm_stat` header
+ * prints, or undefined when the page size or any of the three counts is missing.
+ */
+function parseVmStatAvailable(stdout: string): number | undefined {
+  const pageSize = /^Mach Virtual Memory Statistics: \(page size of (\d+) bytes\)$/m.exec(
+    stdout,
+  )?.[1];
+  if (pageSize === undefined) return;
+  let pages = 0;
+  for (const pattern of VM_STAT_AVAILABLE_COUNTS) {
+    const count = pattern.exec(stdout)?.[1];
+    if (count === undefined) return;
+    pages += Number(count);
+  }
+  return pages * Number(pageSize);
+}
+
+/** Why `vm_stat` produced no output: it never spawned, hit the timeout, or exited unsuccessfully. */
+function describeVmStatFailure(err: ExecFileException): string {
+  if (typeof err.code === 'string') return `could not be started (${err.code})`;
+  if (err.killed) return `did not finish within ${VM_STAT_TIMEOUT_MS} ms`;
+  return `exited with ${err.code == null ? `signal ${err.signal}` : `status ${err.code}`}`;
+}
+
+/** The failure the `memory_stats_unavailable` contract entry declares. */
+const statsUnavailable = (detail: string, cause?: unknown) =>
+  serviceUnavailable(
+    `Could not read the host's memory statistics: ${VM_STAT_PATH} ${detail}.`,
+    { reason: 'memory_stats_unavailable' },
+    { cause },
+  );
+
+/**
+ * The headroom Node's `process.availableMemory()` reports on macOS — libuv's
+ * darwin `uv_get_available_memory()` — computed from `vm_stat`, for Bun, whose
+ * `availableMemory()` there is free pages alone. Never falls back to free pages:
+ * a spawn that fails or prints no page counts throws `memory_stats_unavailable`,
+ * and a cancellation rejects with the caller's abort reason.
+ */
+async function readVmStatAvailable(signal: AbortSignal): Promise<number> {
+  const stdout = await new Promise<string>((resolve, reject) => {
+    try {
+      execFile(VM_STAT_PATH, [], { timeout: VM_STAT_TIMEOUT_MS, signal }, (err, out) => {
+        if (signal.aborted) reject(signal.reason);
+        else if (err) reject(statsUnavailable(describeVmStatFailure(err), err));
+        else resolve(out);
+      });
+    } catch (err) {
+      // Bun and Node throw a spawn the OS refuses outright (EPERM under a
+      // sandbox) from execFile itself, its errno as a string `code`; ENOENT
+      // still arrives through the callback.
+      reject(statsUnavailable(describeVmStatFailure(err as ExecFileException), err));
+    }
+  });
+  const available = parseVmStatAvailable(stdout);
+  if (available === undefined) {
+    throw statsUnavailable('printed no page size or no free, inactive, or purgeable page count');
+  }
+  return available;
+}
+
+/** Bun reports `process.release.name` as "node", so only `versions.bun` tells the runtimes apart. */
+const isBun = () => process.versions.bun !== undefined;
+
 /**
  * Memory figures for the host and, when one applies, the container limit.
  * `constrainedMemory()` is the limit, but its no-limit value varies: Node reports
  * 0 on a bare host and 2^64 − 1 in an unlimited cgroup, and Bun reports the full
  * physical RAM, so only a value below `totalmem()` counts.
- * `availableMemory()` is the headroom, but Bun's ignores the cgroup limit (it
- * returns host free memory), so under a limit it is clamped to limit − usage.
+ * `availableMemory()` is the headroom, but Bun's is `os.freemem()`. That ignores
+ * the cgroup limit, so under a limit it is clamped to limit − usage. On Linux
+ * and Windows it is already the OS available-memory figure; on macOS, where it
+ * is free pages alone, the figure comes from `vm_stat` as Node computes it.
  */
-function readMemory() {
+async function readMemory(signal: AbortSignal) {
   const totalBytes = os.totalmem();
   const freeBytes = os.freemem();
   const constrained = process.constrainedMemory();
   const limitBytes = constrained > 0 && constrained < totalBytes ? constrained : undefined;
-  const available = process.availableMemory();
+  const available =
+    isBun() && process.platform === 'darwin'
+      ? await readVmStatAvailable(signal)
+      : process.availableMemory();
   const availableBytes =
     limitBytes === undefined
       ? available
@@ -76,7 +162,7 @@ const InterfaceSchema = z
 export const checkSystemTool = tool('toolkit_check_system', {
   title: 'toolkit-mcp-server: check system',
   description:
-    "Report a facet of the server host's system state, read-only. what selects the facet: os (platform, release, architecture, hostname, uptime, Node version), cpu (model, core count, speed), memory (available headroom and any container limit, plus the raw OS total/free/used bytes), load (1/5/15-minute load averages, all zero on Windows), or interfaces (non-internal network interfaces with their addresses and families). Exactly one facet object is populated per call, matching what; the others are absent. All values describe the host this server runs on, NOT the calling client — so this is useful only on a local or self-hosted deployment. interfaces and os disclose host topology and version details, which is why this tool is gated off by default.",
+    "Report a facet of the server host's system state, read-only. what selects the facet: os (platform, release, architecture, hostname, uptime, and the JavaScript runtime with its version), cpu (model, core count, speed), memory (available headroom and any container limit, plus the raw OS total/free/used bytes), load (1/5/15-minute load averages, all zero on Windows), or interfaces (non-internal network interfaces with their addresses and families). Exactly one facet object is populated per call, matching what; the others are absent. All values describe the host this server runs on, NOT the calling client — so this is useful only on a local or self-hosted deployment. interfaces and os disclose host topology and version details, which is why this tool is gated off by default.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: false },
   input: z.object({
     what: z
@@ -95,7 +181,19 @@ export const checkSystemTool = tool('toolkit_check_system', {
         arch: z.string().describe('CPU architecture, e.g. "arm64", "x64".'),
         hostname: z.string().describe('Host machine name.'),
         uptimeSeconds: z.number().describe('System uptime in seconds.'),
-        nodeVersion: z.string().describe('Node.js runtime version of the server process.'),
+        runtime: z
+          .enum(['bun', 'node'])
+          .describe('The JavaScript runtime running the server process: "bun" or "node".'),
+        runtimeVersion: z
+          .string()
+          .describe(
+            'Version of that runtime, without a "v" prefix — e.g. "1.4.4" under Bun, "26.13.0" under Node.js.',
+          ),
+        nodeVersion: z
+          .string()
+          .describe(
+            'The Node.js version the process reports, with a "v" prefix. Under Node.js it is the runtime version; under Bun it is the Node.js API level Bun implements, not the Bun version (runtimeVersion carries that).',
+          ),
       })
       .optional()
       .describe('Operating-system facts. Present only for what="os".'),
@@ -117,17 +215,17 @@ export const checkSystemTool = tool('toolkit_check_system', {
         freeBytes: z
           .number()
           .describe(
-            'Free physical memory in bytes, the raw OS figure. It excludes reclaimable cache (on macOS, inactive and purgeable pages), so it can read near zero on a healthy host.',
+            "Free physical memory in bytes, the raw OS figure. On macOS it counts free pages only, excluding reclaimable inactive and purgeable pages, so it can read near zero on a healthy host; on Linux and Windows it is the OS's available-memory figure, which counts reclaimable cache as free.",
           ),
         usedBytes: z
           .number()
           .describe(
-            'totalBytes − freeBytes, the raw OS figure. Counts reclaimable cache as used, so it overstates real pressure; availableBytes is the headroom.',
+            'totalBytes − freeBytes, the raw OS figure. On macOS it counts reclaimable cache as used, so it overstates real pressure there; availableBytes is the headroom.',
           ),
         availableBytes: z
           .number()
           .describe(
-            'Memory still available to this server process for new allocations, in bytes — the headroom figure. Bounded by the container limit minus current usage when limitBytes is present.',
+            "Memory still available to this server process for new allocations, in bytes — the headroom figure. On macOS it counts free, inactive, and purgeable pages; on Linux and Windows it is the OS's available-memory figure. Bounded by the container limit minus current usage when limitBytes is present.",
           ),
         limitBytes: z
           .number()
@@ -152,10 +250,23 @@ export const checkSystemTool = tool('toolkit_check_system', {
       .describe('Non-internal network interfaces on the host. Present only for what="interfaces".'),
   }),
 
-  handler(input, ctx) {
+  errors: [
+    {
+      reason: 'memory_stats_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'what is memory, the server runs under Bun on macOS, and the host page statistics could not be read because the statistics command failed to start, did not finish in time, exited with a non-zero status, was terminated by a signal, or printed no page counts.',
+      recovery:
+        'Retry once; if it fails again, treat memory headroom as unknown on this host rather than estimating it, and use the other facets, which do not read these statistics.',
+      // readVmStatAvailable raises it; the handler never names the reason.
+      thrownBy: 'service',
+    },
+  ],
+
+  async handler(input, ctx) {
     ctx.log.info('Check system', { what: input.what });
     switch (input.what) {
-      case 'os':
+      case 'os': {
+        const runtime: 'bun' | 'node' = isBun() ? 'bun' : 'node';
         return {
           what: 'os' as const,
           os: {
@@ -164,9 +275,12 @@ export const checkSystemTool = tool('toolkit_check_system', {
             arch: os.arch(),
             hostname: os.hostname(),
             uptimeSeconds: Math.round(os.uptime()),
+            runtime,
+            runtimeVersion: process.versions.bun ?? process.versions.node,
             nodeVersion: process.version,
           },
         };
+      }
       case 'cpu': {
         const cpus = os.cpus();
         const first = cpus[0];
@@ -180,7 +294,7 @@ export const checkSystemTool = tool('toolkit_check_system', {
         };
       }
       case 'memory':
-        return { what: 'memory' as const, memory: readMemory() };
+        return { what: 'memory' as const, memory: await readMemory(ctx.signal) };
       case 'load': {
         const [avg1 = 0, avg5 = 0, avg15 = 0] = os.loadavg();
         return { what: 'load' as const, load: { avg1, avg5, avg15 } };
@@ -210,7 +324,7 @@ export const checkSystemTool = tool('toolkit_check_system', {
     if (result.os) {
       const o = result.os;
       lines.push(
-        `**OS:** ${o.platform} ${o.release} (${o.arch}) | **Host:** ${o.hostname} | **Uptime:** ${o.uptimeSeconds}s | **Node:** ${o.nodeVersion}`,
+        `**OS:** ${o.platform} ${o.release} (${o.arch}) | **Host:** ${o.hostname} | **Uptime:** ${o.uptimeSeconds}s | **Runtime:** ${o.runtime} ${o.runtimeVersion} | **Node.js API:** ${o.nodeVersion}`,
       );
     }
     if (result.cpu) {
