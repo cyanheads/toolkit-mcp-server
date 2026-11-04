@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.0](changelog/2.4.x/2.4.0.md) — 2026-11-03 · 🛡️ Security
+
+Published toolkit-guide agent skill and server instructions, HMAC and checksum-line verification in toolkit_hash_value, dual-stack probing in toolkit_check_network, and macOS memory headroom under Bun in toolkit_check_system.
+
 ## [2.3.3](changelog/2.3.x/2.3.3.md) — 2026-10-14 · 🛡️ Security
 
 Batch geolocation with quota recovery, Windows ping accuracy, and clean configuration startup.
