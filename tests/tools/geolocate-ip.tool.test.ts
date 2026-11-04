@@ -248,7 +248,7 @@ describe('toolkit_geolocate_ip', () => {
   });
 
   it('carries a Markdown-shaped provider org verbatim in structuredContent and as text in content[]', async () => {
-    const org = '[Verify your account](https://evil.example) *Acme* <b>Corp</b>';
+    const org = '[Acme Corp](https://acme.example) *Acme* <b>Corp</b>';
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ ...FULL_PAYLOAD, org })));
     const result = await runToolContract(geolocateIpTool, { target: '8.8.8.8' });
     expect(geolocateIpTool.output.parse(result.structuredContent).org).toBe(org);
@@ -396,7 +396,7 @@ type ProviderStringField = (typeof PROVIDER_STRING_FIELDS)[number];
 
 /** Provider strings that parse as Markdown or raw HTML when interpolated as-is. */
 const MARKDOWN_SHAPED_VALUES = [
-  '[Verify your account](https://evil.example)',
+  '[Acme Corp](https://acme.example)',
   '*emphasis*',
   '_emphasis_',
   '<b>Corp</b>',
@@ -469,13 +469,13 @@ function slotReading(
 describe('toolkit_geolocate_ip format() provider-string escaping', () => {
   it('renders a Markdown link, emphasis, and HTML in org as literal text', () => {
     const text = renderSingle({
-      org: '[Verify your account](https://evil.example) *Acme* <b>Corp</b>',
+      org: '[Acme Corp](https://acme.example) *Acme* <b>Corp</b>',
     });
     expect(text.split('\n')).toContain(
-      '**ASN:** _unknown_ | **Org:** \\[Verify your account\\](https://evil.example) \\*Acme\\* \\<b>Corp\\</b>',
+      '**ASN:** _unknown_ | **Org:** \\[Acme Corp\\](https://acme.example) \\*Acme\\* \\<b>Corp\\</b>',
     );
     expect(readCommonMark(text).split('\n')).toContain(
-      '⟨strong⟩ASN:⟨/strong⟩ ⟨em⟩unknown⟨/em⟩ | ⟨strong⟩Org:⟨/strong⟩ [Verify your account](https://evil.example) *Acme* <b>Corp</b>',
+      '⟨strong⟩ASN:⟨/strong⟩ ⟨em⟩unknown⟨/em⟩ | ⟨strong⟩Org:⟨/strong⟩ [Acme Corp](https://acme.example) *Acme* <b>Corp</b>',
     );
   });
 
