@@ -1,6 +1,6 @@
 # toolkit-mcp-server - Directory Structure
 
-Generated on: 2026-10-14 18:48:49
+Generated on: 2026-11-04 04:19:49
 
 ```text
 toolkit-mcp-server/
@@ -40,6 +40,8 @@ toolkit-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -137,6 +139,9 @@ toolkit-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── toolkit-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -161,8 +166,15 @@ toolkit-mcp-server/
 │   │   └── network/
 │   │       ├── net-diag-service.ts
 │   │       └── target.ts
+│   ├── utils/
+│   │   └── strict-decode.ts
 │   └── index.ts
 ├── tests/
+│   ├── helpers/
+│   │   ├── commonmark.ts
+│   │   └── json-response.ts
+│   ├── scripts/
+│   │   └── bundle-agent-docs.test.ts
 │   ├── services/
 │   │   ├── geo-quota.test.ts
 │   │   ├── geo-service-correlation.test.ts
@@ -197,7 +209,9 @@ toolkit-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

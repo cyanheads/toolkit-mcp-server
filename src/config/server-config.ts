@@ -1,8 +1,7 @@
 /**
  * @fileoverview Server-specific configuration for toolkit-mcp-server.
  * Holds the security gate flags (fail-closed) and geolocation endpoint settings.
- * Lazy-parsed via `parseEnvConfig` so env-var names appear in validation errors
- * and Workers can inject env at request time.
+ * Lazy-parsed via `parseEnvConfig` so env-var names appear in validation errors.
  * @module config/server-config
  */
 

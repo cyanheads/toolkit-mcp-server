@@ -52,7 +52,7 @@ toolkit_geolocate_ip    — IP (or hostname) → country/region/city, lat/lon, A
 toolkit_check_network   — GATED (TOOLKIT_ENABLE_NET_DIAGNOSTICS). mode: 'ping' | 'traceroute'
                           | 'connectivity' (host[:port]) | 'public_ip'. Rejects private/reserved
                           targets unless TOOLKIT_ALLOW_PRIVATE_NETWORK. Node-only (raw sockets)
-                          — absent on the Workers build.
+                          — a Workers build would omit it.
 
 toolkit_check_system    — GATED (TOOLKIT_ENABLE_SYSTEM_INFO). what: 'os' | 'cpu' | 'memory'
                           | 'load' | 'interfaces'. Reports the HOST — useful locally, off on
@@ -74,7 +74,7 @@ Fail-closed: these are **enable** flags defaulting off, not disable flags defaul
 
 - **Fail-closed is the whole point of the rebuild.** Gated tools are *not registered* when their flag is off — they're invisible in `tools/list`, not present-but-erroring. An agent on the hosted deployment can't even see net-diag/system-info. This inverts the legacy server's everything-on default and is the direct answer to "disable env vars for the insecure ones."
 - **Two-tier network gate.** Enabling net-diag still blocks RFC-1918 / reserved / loopback / link-local destinations by default; reaching internal hosts needs the *second* `TOOLKIT_ALLOW_PRIVATE_NETWORK` gate. This kills the cloud-metadata-endpoint (`169.254.169.254`) and internal-recon SSRF vectors even when diagnostics are intentionally on.
-- **Runtime split (mirror whois).** `toolkit_check_network` (raw sockets) and `toolkit_check_system` (`os`/`process`) are Node-only. The Cloudflare Workers build carries only hash + id + encode + qr + geolocate (all HTTPS/pure-compute). Document it so the hosted-on-Workers path isn't expected to diagnose networks.
+- **Runtime split (mirror whois).** `toolkit_check_network` (raw sockets) and `toolkit_check_system` (`os`/`process`) are Node-only, so a Cloudflare Workers build would carry only hash + id + encode + qr + geolocate (all HTTPS/pure-compute). Document it so the hosted-on-Workers path isn't expected to diagnose networks.
 - **MD5/SHA-1 stay, flagged.** Not a host-security risk (they're checksums here, not password/signature crypto), and dropping them breaks legit file-integrity checks against vendor-published MD5s. Keep them, default to sha256, and say "checksum/compat only — not for security" in the description.
 - **ID gen and QR are the criterion-clearing tools** — entropy the model shouldn't fake, and bytes it can't emit. Lead the README and tool descriptions with those, not with hashing.
 - **Geolocation is the lone external dep**, so it's the only tool with a resilience layer (retry/backoff/cache); the rest are local and synchronous. Pick a keyless-tier provider (ip-api class) to keep the hosted profile zero-config.
