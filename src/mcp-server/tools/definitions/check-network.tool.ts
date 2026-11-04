@@ -10,13 +10,14 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getNetDiagService } from '@/services/network/net-diag-service.js';
 import { NetworkTargetSchema } from '@/services/network/target.js';
 
 export const checkNetworkTool = tool('toolkit_check_network', {
   title: 'toolkit-mcp-server: check network',
   description:
-    "Run a read-only network diagnostic from the server host. mode selects the probe: ping (ICMP round-trip), traceroute (the hop path to the target), connectivity (a raw TCP connect to target on port), or public_ip (the host's own egress IP, where target is absent and ignored). target takes an IPv4/IPv6 address or a hostname (resolved server-side) and is required for every mode except public_ip; port is required only for connectivity and is passed separately, never as host:port. count sets ping echo requests and timeoutMs the per-probe deadline. A host that does not respond is reported as reachable:false — a valid result, not an error. ping also reports packets sent, received, and percent lost; connectivity reports an outcome of open, refused (nothing listening on the port), timeout (traffic dropped), or unreachable (no route or another socket error). The populated output fields depend on mode. This tool diagnoses the SERVER's own network, so it is useful only on a local/self-hosted deployment; reaching a private/reserved/internal target additionally requires the operator to enable TOOLKIT_ALLOW_PRIVATE_NETWORK.",
+    "Run a read-only network diagnostic from the server host. mode selects the probe: ping (ICMP round-trip), traceroute (the hop path to the target), connectivity (a raw TCP connect to target on port), or public_ip (the host's IPv4 egress address, where target is absent and ignored; it cannot show whether IPv6 egress works). target takes an IPv4/IPv6 address or a hostname and is required for every mode except public_ip; port is required only for connectivity and is passed separately, never as host:port. A hostname is resolved server-side to all of its addresses, which are tried in turn, alternating IPv4 and IPv6, until one gives a result; resolvedIp names the address whose result is reported, and family (4 or 6) limits the probe to one address family. count sets ping echo requests; timeoutMs is the ping wait per echo and, for connectivity, one budget shared by every address tried. A host that does not respond is reported as reachable:false — a valid result, not an error. ping also reports packets sent, received, and percent lost; connectivity reports an outcome of open, refused (nothing listening on the port), timeout (traffic dropped), or unreachable (no route or another socket error). The populated output fields depend on mode. This tool diagnoses the SERVER's own network, so it is useful only on a local/self-hosted deployment; reaching a private/reserved/internal target additionally requires the operator to enable TOOLKIT_ALLOW_PRIVATE_NETWORK, and without it a hostname's private/reserved addresses are skipped.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: false },
   input: z.object({
     mode: z
@@ -50,7 +51,13 @@ export const checkNetworkTool = tool('toolkit_check_network', {
       .max(30000)
       .default(3000)
       .describe(
-        'Per-probe deadline in milliseconds for ping and connectivity. On macOS/BSD an IPv6 ping runs ping6, which has no deadline flag and ignores it.',
+        'Deadline in milliseconds: for ping, the wait allowed per echo request; for connectivity, one budget for the whole probe, shared by every address tried. On macOS/BSD an IPv6 ping runs ping6, which has no deadline flag and ignores it.',
+      ),
+    family: z
+      .literal([4, 6])
+      .optional()
+      .describe(
+        'Address family to probe: 4 (IPv4) or 6 (IPv6). Omit to try every address the target has. A target with no address of that family fails as family_mismatch. Ignored for public_ip.',
       ),
   }),
   /**
@@ -65,6 +72,12 @@ export const checkNetworkTool = tool('toolkit_check_network', {
       .enum(['ping', 'traceroute', 'connectivity', 'public_ip'])
       .describe('The diagnostic that ran.'),
     target: z.string().optional().describe('The target probed. Absent for public_ip.'),
+    resolvedIp: z
+      .string()
+      .optional()
+      .describe(
+        "The address whose result is reported: the target itself when it is an IP address, otherwise the hostname's address that gave the result — for connectivity with no open port, the last address tried. Present for ping, traceroute, and connectivity.",
+      ),
     reachable: z
       .boolean()
       .optional()
@@ -121,14 +134,16 @@ export const checkNetworkTool = tool('toolkit_check_network', {
     publicIp: z
       .string()
       .optional()
-      .describe("The host's egress IP as seen externally. Present for public_ip mode."),
+      .describe(
+        "The host's IPv4 egress address as seen externally; it says nothing about IPv6 egress. Present for public_ip mode.",
+      ),
   }),
 
   errors: [
     {
       reason: 'private_target_blocked',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The target is private/reserved/loopback/link-local and TOOLKIT_ALLOW_PRIVATE_NETWORK is off.',
+      when: 'The target, or every address a hostname target resolves to, is private/reserved/loopback/link-local and TOOLKIT_ALLOW_PRIVATE_NETWORK is off.',
       recovery:
         'This target is a private/reserved address. Set TOOLKIT_ALLOW_PRIVATE_NETWORK=true to permit local-network diagnostics.',
       // NetDiagService.guardTarget raises it; the handler never names the reason.
@@ -137,10 +152,19 @@ export const checkNetworkTool = tool('toolkit_check_network', {
     {
       reason: 'unreachable',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'A hostname target could not be resolved, or the ping/traceroute binary could not run in this environment or exited without a result.',
+      when: 'No diagnosis ran: a hostname target could not be resolved, which fails every mode, connectivity included; or the ping/traceroute binary gave no result for any address tried, because it is missing or could not start, was stopped at its time limit, or exited with an error status and no readable result.',
       recovery:
-        'Verify the host resolves and the diagnostic binary is available, or try mode connectivity with a port, which uses raw TCP.',
-      // NetDiagService.resolve, .ping, and .traceroute raise it.
+        'If the hostname could not be resolved, check its spelling or pass its IP address instead; connectivity resolves it the same way. If ping or traceroute gave no result, run mode connectivity with the port of a service the host runs (e.g. 443), which needs no binary.',
+      // NetDiagService.resolve and .runEach (ping, traceroute) raise it.
+      thrownBy: 'service',
+    },
+    {
+      reason: 'family_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'family is set and the target has no address of that family: an IP address of the other family, or a hostname without such a record.',
+      recovery:
+        'Omit family to probe whichever family the target has, or set family to match an address the target resolves to.',
+      // NetDiagService.guardTarget raises it after resolution.
       thrownBy: 'service',
     },
     {
@@ -169,11 +193,17 @@ export const checkNetworkTool = tool('toolkit_check_network', {
   // fields at once; every branch below emits its fields, so all paths are covered.
   format: (result) => {
     const lines: string[] = [`**Mode:** ${result.mode}`];
+    if (result.resolvedIp) lines.push(`**Resolved IP:** ${result.resolvedIp}`);
     if (result.publicIp) lines.push(`**Host egress IP:** ${result.publicIp}`);
     if (result.hops) {
-      lines.push(`**Traceroute to ${result.target ?? '?'}** (${result.hops.length} hops)`);
+      const count = result.hops.length;
+      lines.push(
+        `**Traceroute to ${result.target ?? '?'}** (${count} ${count === 1 ? 'hop' : 'hops'})`,
+      );
+      // Escaped so a silent hop's "*" reads as itself, not as an empty nested list item.
       for (const h of result.hops) {
-        lines.push(`${h.hop}. ${h.address}${h.rttMs != null ? ` — ${h.rttMs} ms` : ''}`);
+        const rtt = h.rttMs != null ? ` — ${h.rttMs} ms` : '';
+        lines.push(`${h.hop}. ${escapeMarkdownInline(h.address)}${rtt}`);
       }
     }
     if (result.reachable !== undefined) {

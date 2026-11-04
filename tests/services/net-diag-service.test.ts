@@ -3,7 +3,9 @@
  * command lines per platform and address family, the ping/traceroute output
  * parsers (RTT and packet loss), the split between a real no-reply and a probe
  * that never ran, the TCP connect outcome, the declared failure reasons, and
- * the sanitized egress-IP provider failure. The service throws a reason only;
+ * the sanitized egress-IP provider failure — plus how a hostname is resolved
+ * once to every address, ordered, filtered by family, and tried address by
+ * address under one deadline. The service throws a reason only;
  * the framework fills its contract recovery hint at the handler boundary, which
  * the tool-layer contract tests assert.
  * `node:child_process`, `node:dns/promises`, and `node:net`'s `connect` are
@@ -14,12 +16,15 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { isIP } from 'node:net';
 import process from 'node:process';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetServerConfig } from '@/config/server-config.js';
 import { checkNetworkTool } from '@/mcp-server/tools/definitions/check-network.tool.js';
 import { getNetDiagService, initNetDiagService } from '@/services/network/net-diag-service.js';
+import { jsonResponse } from '../helpers/json-response.js';
 
 const { execFileMock, lookupMock, connectMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
@@ -51,6 +56,56 @@ const socketEmits = (event: 'connect' | 'timeout' | 'error', payload?: unknown) 
 };
 const socketError = (code: string) =>
   Object.assign(new Error(`connect ${code} 8.8.8.8:443`), { code, syscall: 'connect' });
+
+/** What one connect() attempt does: emit `event`, after `afterMs` of the faked clock passes. */
+type SocketScript = { event: 'connect' | 'timeout' | 'error'; payload?: unknown; afterMs?: number };
+
+/**
+ * One fake socket per connect() call, each following its own script. A script
+ * without `event` leaves its socket pending, as a connect that has not settled.
+ */
+const socketsFollow = (...scripts: Array<SocketScript | 'pending'>) => {
+  const sockets = scripts.map(() => new FakeSocket());
+  connectMock.mockImplementation(() => {
+    const index = connectMock.mock.calls.length - 1;
+    const socket = sockets[index] as FakeSocket;
+    const script = scripts[index];
+    if (script && script !== 'pending') {
+      setImmediate(() => {
+        if (script.afterMs) vi.advanceTimersByTime(script.afterMs);
+        socket.emit(script.event, script.payload);
+      });
+    }
+    return socket;
+  });
+  return sockets;
+};
+const refused = (afterMs?: number): SocketScript => ({
+  event: 'error',
+  payload: socketError('ECONNREFUSED'),
+  ...(afterMs !== undefined && { afterMs }),
+});
+
+/** The host each connect() call was handed, in call order. */
+const connectedHosts = () =>
+  connectMock.mock.calls.map((call) => (call[0] as { host: string }).host);
+
+/**
+ * The resolver answers `addresses` in this order: an `{ all: true }` lookup
+ * gets every one, a bare lookup only the first — the two shapes `dns.lookup`
+ * returns.
+ */
+const resolvesTo = (...addresses: string[]) =>
+  lookupMock.mockImplementation(async (_host: string, options?: { all?: boolean }) => {
+    const answers = addresses.map((address) => ({ address, family: isIP(address) }));
+    return options?.all ? answers : answers[0];
+  });
+
+/** Two public addresses per family for one dual-stack name, all outside the private-range gate. */
+const V6_A = '2607:f8b0:4009:819::2004';
+const V6_B = '2607:f8b0:4009:81a::2004';
+const V4_A = '142.250.190.36';
+const V4_B = '142.250.190.68';
 
 /** Promisified execFile resolves `{ stdout, stderr }`; the mock answers in kind. */
 const spawnSucceeds = (stdout: string) =>
@@ -100,6 +155,67 @@ const spawnedWith = (): [string, string[]] => {
   const call = execFileMock.mock.calls[0] as [string, string[], unknown, unknown];
   return [call[0], call[1]];
 };
+
+/** How one spawn ends: success with `stdout`, a non-zero exit, a spawn errno, or the timeout kill. */
+type SpawnScript =
+  | { stdout: string; afterMs?: number }
+  | { exit: number; stdout?: string; stderr?: string; afterMs?: number }
+  | { missing: 'ENOENT'; afterMs?: number }
+  | { killed: true; afterMs?: number };
+
+/** One scripted outcome per execFile call, in call order. */
+const spawnsFollow = (...scripts: SpawnScript[]) =>
+  execFileMock.mockImplementation(
+    (
+      cmd: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (e: Error | null, r?: { stdout: string; stderr: string }) => void,
+    ) => {
+      const script = scripts[execFileMock.mock.calls.length - 1] as SpawnScript;
+      if (script.afterMs) vi.advanceTimersByTime(script.afterMs);
+      if ('exit' in script) {
+        cb(
+          Object.assign(new Error(`Command failed: ${cmd}`), {
+            code: script.exit,
+            stdout: script.stdout ?? '',
+            stderr: script.stderr ?? '',
+          }),
+        );
+      } else if ('missing' in script) {
+        cb(
+          Object.assign(new Error(`spawn ${cmd} ${script.missing}`), {
+            code: script.missing,
+            stdout: '',
+            stderr: '',
+          }),
+        );
+      } else if ('killed' in script) {
+        cb(
+          Object.assign(new Error(`Command failed: ${cmd}`), {
+            code: null,
+            killed: true,
+            signal: 'SIGTERM',
+            stdout: '',
+            stderr: '',
+          }),
+        );
+      } else {
+        cb(null, { stdout: script.stdout, stderr: '' });
+      }
+    },
+  );
+
+/** Every spawn as `[command, args, timeout]`, in call order. */
+const spawns = () =>
+  execFileMock.mock.calls.map((call) => {
+    const [cmd, args, opts] = call as [string, string[], { timeout: number }];
+    return [cmd, args, opts.timeout] as const;
+  });
+
+/** macOS 27 `ping6` / `traceroute6` with no global IPv6 route: exit 1, stderr only. */
+const PING6_NO_ROUTE = { exit: 1, stderr: 'ping6: UDP connect: No route to host\n' } as const;
+const TRACEROUTE6_NO_ROUTE = { exit: 1, stderr: 'connect: No route to host\n' } as const;
 
 const ORIGINAL_PLATFORM = process.platform;
 const setPlatform = (value: NodeJS.Platform) =>
@@ -223,17 +339,6 @@ Tracing route to 8.8.8.8 over a maximum of 30 hops
 Trace complete.
 `;
 
-/** Response-like object for the stubbed egress-IP echo. */
-const jsonResponse = (body: unknown, status = 200): Response =>
-  ({
-    ok: status >= 200 && status < 300,
-    status,
-    statusText: status === 200 ? 'OK' : 'Error',
-    headers: new Headers(),
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-  }) as unknown as Response;
-
 describe('NetDiagService probes', () => {
   beforeEach(() => {
     resetServerConfig();
@@ -245,6 +350,7 @@ describe('NetDiagService probes', () => {
 
   afterEach(() => {
     setPlatform(ORIGINAL_PLATFORM);
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     resetServerConfig();
@@ -352,6 +458,7 @@ describe('NetDiagService probes', () => {
       expect(result).toEqual({
         mode: 'ping',
         target: '8.8.8.8',
+        resolvedIp: '8.8.8.8',
         reachable: false,
         sent: 2,
         received: 0,
@@ -493,10 +600,7 @@ Ping-Statistik für 8.8.8.8:
 
     it('runs ping6 when a hostname resolves to an IPv6 address on darwin', async () => {
       setPlatform('darwin');
-      lookupMock.mockResolvedValue({
-        address: '2606:2800:21f:cb07:6820:80da:af6b:8b2c',
-        family: 6,
-      });
+      resolvesTo('2606:2800:21f:cb07:6820:80da:af6b:8b2c');
       spawnSucceeds(PING_BSD);
       await run({ mode: 'ping', target: 'example.com', count: 1, timeoutMs: 1000 });
       expect(spawnedWith()).toEqual([
@@ -617,6 +721,7 @@ Ping-Statistik für 8.8.8.8:
       expect(result).toEqual({
         mode: 'ping',
         target: '1.1.1.1',
+        resolvedIp: '1.1.1.1',
         reachable: true,
         rttMs: 508.139,
         sent: 1,
@@ -629,7 +734,13 @@ Ping-Statistik für 8.8.8.8:
       setPlatform('darwin');
       spawnSucceeds('64 bytes from 8.8.8.8: icmp_seq=0 ttl=118 time=11.234 ms\n');
       const result = await run({ mode: 'ping', target: '8.8.8.8', count: 1, timeoutMs: 1000 });
-      expect(result).toEqual({ mode: 'ping', target: '8.8.8.8', reachable: true, rttMs: 11.234 });
+      expect(result).toEqual({
+        mode: 'ping',
+        target: '8.8.8.8',
+        resolvedIp: '8.8.8.8',
+        reachable: true,
+        rttMs: 11.234,
+      });
     });
   });
 
@@ -681,6 +792,7 @@ Ping-Statistik für 8.8.8.8:
       expect(await probe()).toEqual({
         mode: 'connectivity',
         target: '8.8.8.8',
+        resolvedIp: '8.8.8.8',
         reachable: false,
         outcome: 'timeout',
       });
@@ -697,6 +809,7 @@ Ping-Statistik für 8.8.8.8:
       expect(await probe()).toEqual({
         mode: 'connectivity',
         target: '8.8.8.8',
+        resolvedIp: '8.8.8.8',
         reachable: false,
         outcome,
       });
@@ -763,6 +876,7 @@ Ping-Statistik für 8.8.8.8:
       expect(result).toEqual({
         mode: 'traceroute',
         target: '8.8.8.8',
+        resolvedIp: '8.8.8.8',
         hops: [
           { hop: 1, address: '192.168.1.1', rttMs: 1.234 },
           { hop: 2, address: '*' },
@@ -882,6 +996,7 @@ Ping-Statistik für 8.8.8.8:
       expect(result).toEqual({
         mode: 'traceroute',
         target: '8.8.8.8',
+        resolvedIp: '8.8.8.8',
         hops: [
           { hop: 1, address: '192.168.1.1', rttMs: 1 },
           { hop: 2, address: '*' },
@@ -921,7 +1036,7 @@ Ping-Statistik für 8.8.8.8:
 
     it('probes the resolved address when a hostname does resolve', async () => {
       setPlatform('darwin');
-      lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
+      resolvesTo('93.184.216.34');
       spawnSucceeds(PING_BSD);
       const result = await run({
         mode: 'ping',
@@ -930,8 +1045,470 @@ Ping-Statistik für 8.8.8.8:
         timeoutMs: 1000,
       });
       expect(spawnedWith()[1]).toContain('93.184.216.34');
-      // The echoed target stays the caller's hostname, not the resolved IP.
-      expect(result).toMatchObject({ mode: 'ping', target: 'example.com' });
+      // The echoed target stays the caller's hostname; resolvedIp names the address.
+      expect(result).toMatchObject({
+        mode: 'ping',
+        target: 'example.com',
+        resolvedIp: '93.184.216.34',
+      });
+    });
+  });
+
+  describe('hostname resolution — one lookup, every address', () => {
+    it('resolves a hostname once, asking for every address and never for a family', async () => {
+      setPlatform('darwin');
+      resolvesTo('93.184.216.34');
+      spawnSucceeds(PING_BSD);
+      const result = await run({
+        mode: 'ping',
+        target: 'example.com',
+        count: 1,
+        timeoutMs: 1000,
+        family: 4,
+      });
+      expect(lookupMock).toHaveBeenCalledTimes(1);
+      expect(lookupMock).toHaveBeenCalledWith('example.com', { all: true });
+      expect(result).toMatchObject({ target: 'example.com', resolvedIp: '93.184.216.34' });
+    });
+
+    it('never resolves an IP literal, and reports it as the resolved address', async () => {
+      socketsFollow({ event: 'connect' });
+      const result = await run({
+        mode: 'connectivity',
+        target: V4_A,
+        port: 443,
+        count: 3,
+        timeoutMs: 2000,
+      });
+      expect(lookupMock).not.toHaveBeenCalled();
+      expect(connectedHosts()).toEqual([V4_A]);
+      expect(result).toMatchObject({ target: V4_A, resolvedIp: V4_A, outcome: 'open' });
+    });
+
+    it('rejects with the abort reason while DNS is pending, without waiting for the answer', async () => {
+      let answer: (value: unknown) => void = () => undefined;
+      lookupMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const controller = new AbortController();
+      const settled = getNetDiagService()
+        .run(
+          { mode: 'connectivity', target: 'example.com', port: 443, count: 3, timeoutMs: 2000 },
+          createMockContext({ errors: checkNetworkTool.errors, signal: controller.signal }),
+        )
+        .then(
+          () => 'resolved',
+          (e: unknown) => e,
+        );
+      await vi.waitFor(() => expect(lookupMock).toHaveBeenCalled());
+      const reason = new Error('client cancelled');
+      controller.abort(reason);
+      const first = await Promise.race([
+        settled,
+        new Promise((resolve) => setImmediate(() => resolve('still waiting on DNS'))),
+      ]);
+      expect(first).toBe(reason);
+      answer([{ address: V4_A, family: 4 }]);
+      await settled;
+      expect(connectMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects without resolving when the caller cancelled before the call', async () => {
+      resolvesTo(V4_A);
+      const controller = new AbortController();
+      const reason = new Error('client cancelled');
+      controller.abort(reason);
+      const error = await getNetDiagService()
+        .run(
+          { mode: 'connectivity', target: 'example.com', port: 443, count: 3, timeoutMs: 2000 },
+          createMockContext({ errors: checkNetworkTool.errors, signal: controller.signal }),
+        )
+        .catch((e: unknown) => e);
+      expect(error).toBe(reason);
+      expect(lookupMock).not.toHaveBeenCalled();
+      expect(connectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('address order', () => {
+    it.each([
+      ['IPv6', [V6_A, V6_B, V4_A, V4_B], [V6_A, V4_A, V6_B, V4_B]],
+      ['IPv4', [V4_A, V4_B, V6_A], [V4_A, V6_A, V4_B]],
+    ])(
+      'alternates families, leading with the family answered first (%s)',
+      async (_family, answers, order) => {
+        resolvesTo(...answers);
+        socketsFollow(...answers.map(() => refused()));
+        await run({
+          mode: 'connectivity',
+          target: 'www.example.com',
+          port: 443,
+          count: 3,
+          timeoutMs: 2000,
+        });
+        expect(connectedHosts()).toEqual(order);
+      },
+    );
+  });
+
+  describe('connectivity — trying each address', () => {
+    const probeName = (timeoutMs = 2000) =>
+      run({ mode: 'connectivity', target: 'www.example.com', port: 443, count: 3, timeoutMs });
+
+    it.each(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'])(
+      'moves past an address whose connect fails with %s and reports the one that opened',
+      async (code) => {
+        // A connect with no route fails ECONNREFUSED under Bun, EHOSTUNREACH under Node.
+        resolvesTo(V6_A, V4_A);
+        socketsFollow({ event: 'error', payload: socketError(code) }, { event: 'connect' });
+        const result = await probeName();
+        expect(connectedHosts()).toEqual([V6_A, V4_A]);
+        expect(result).toEqual({
+          mode: 'connectivity',
+          target: 'www.example.com',
+          resolvedIp: V4_A,
+          reachable: true,
+          outcome: 'open',
+          rttMs: expect.any(Number),
+        });
+      },
+    );
+
+    it("reports the last attempt's outcome and address when no address opens", async () => {
+      resolvesTo(V6_A, V4_A);
+      socketsFollow(refused(), { event: 'error', payload: socketError('EHOSTUNREACH') });
+      expect(await probeName()).toEqual({
+        mode: 'connectivity',
+        target: 'www.example.com',
+        resolvedIp: V4_A,
+        reachable: false,
+        outcome: 'unreachable',
+      });
+    });
+
+    it('spends one timeoutMs budget across attempts, each running on what remains', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] });
+      resolvesTo(V6_A, V4_A);
+      const [first, second] = socketsFollow(refused(1500), { event: 'connect' });
+      await probeName(2000);
+      expect(first?.setTimeout).toHaveBeenCalledWith(2000);
+      expect(second?.setTimeout).toHaveBeenCalledWith(500);
+    });
+
+    it('stops at the deadline: an attempt that times out is the last one tried', async () => {
+      resolvesTo(V6_A, V4_A);
+      socketsFollow({ event: 'timeout' }, { event: 'connect' });
+      expect(await probeName()).toEqual({
+        mode: 'connectivity',
+        target: 'www.example.com',
+        resolvedIp: V6_A,
+        reachable: false,
+        outcome: 'timeout',
+      });
+      expect(connectedHosts()).toEqual([V6_A]);
+    });
+
+    it('stops when an attempt fails with no budget left', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] });
+      resolvesTo(V6_A, V4_A);
+      socketsFollow(refused(2000), { event: 'connect' });
+      expect(await probeName(2000)).toMatchObject({ resolvedIp: V6_A, outcome: 'refused' });
+      expect(connectedHosts()).toEqual([V6_A]);
+    });
+
+    it('times only the attempt that opened', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] });
+      resolvesTo(V6_A, V4_A);
+      socketsFollow(refused(1200), { event: 'connect', afterMs: 7 });
+      expect(await probeName()).toMatchObject({ resolvedIp: V4_A, outcome: 'open', rttMs: 7 });
+    });
+
+    it('rejects with the abort reason mid-chain and tries no further address', async () => {
+      resolvesTo(V6_A, V4_A, V6_B);
+      const [, second] = socketsFollow(refused(), 'pending', { event: 'connect' });
+      const controller = new AbortController();
+      const pending = getNetDiagService()
+        .run(
+          { mode: 'connectivity', target: 'www.example.com', port: 443, count: 3, timeoutMs: 2000 },
+          createMockContext({ errors: checkNetworkTool.errors, signal: controller.signal }),
+        )
+        .catch((e: unknown) => e);
+      await vi.waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
+      const reason = new Error('client cancelled');
+      controller.abort(reason);
+      expect(await pending).toBe(reason);
+      expect(second?.destroy).toHaveBeenCalled();
+      expect(connectMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('ping — trying each address', () => {
+    const pingName = (count = 1) =>
+      run({ mode: 'ping', target: 'www.example.com', count, timeoutMs: 1000 });
+    const spawnedAddresses = () => spawns().map(([cmd, args]) => [cmd, args.at(-1)]);
+
+    it.each([
+      ['no route (exit 1, stderr only)', PING6_NO_ROUTE],
+      ['ping6 missing (ENOENT)', { missing: 'ENOENT' } as const],
+    ] as const)(
+      'moves to the next address when ping produced no result for one: %s',
+      async (_label, firstRun) => {
+        setPlatform('darwin');
+        resolvesTo(V6_A, V4_A);
+        spawnsFollow(firstRun, { stdout: PING_BSD });
+        const result = await pingName();
+        expect(spawnedAddresses()).toEqual([
+          ['ping6', V6_A],
+          ['ping', V4_A],
+        ]);
+        expect(result).toEqual({
+          mode: 'ping',
+          target: 'www.example.com',
+          resolvedIp: V4_A,
+          reachable: true,
+          rttMs: 11.234,
+          sent: 3,
+          received: 3,
+          packetLossPercent: 0,
+        });
+      },
+    );
+
+    it('ends on a loss summary, 100% loss included', async () => {
+      setPlatform('darwin');
+      resolvesTo(V4_A, V6_A);
+      spawnsFollow({ exit: 2, stdout: PING_MACOS_NO_REPLY }, { stdout: PING_BSD });
+      expect(await pingName(2)).toEqual({
+        mode: 'ping',
+        target: 'www.example.com',
+        resolvedIp: V4_A,
+        reachable: false,
+        sent: 2,
+        received: 0,
+        packetLossPercent: 100,
+      });
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends on the spawn-timeout kill, naming the address', async () => {
+      setPlatform('darwin');
+      resolvesTo(V4_A, V6_A);
+      spawnsFollow({ killed: true }, { stdout: PING_BSD });
+      await expect(pingName()).rejects.toMatchObject({
+        message: `ping did not finish within 3000 ms (target www.example.com, address ${V4_A}, 1 of 2 addresses tried).`,
+        data: { reason: 'unreachable' },
+      });
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends on cancellation and tries no further address', async () => {
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      const controller = new AbortController();
+      const abortError = Object.assign(new Error('The operation was aborted'), {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      });
+      execFileMock.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb: (e: Error) => void) => {
+          controller.abort();
+          cb(abortError);
+        },
+      );
+      const error = await getNetDiagService()
+        .run(
+          { mode: 'ping', target: 'www.example.com', count: 1, timeoutMs: 1000 },
+          createMockContext({ errors: checkNetworkTool.errors, signal: controller.signal }),
+        )
+        .catch((e: unknown) => e);
+      expect(error).toBe(abortError);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('names the last address after every address failed', async () => {
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      spawnsFollow(PING6_NO_ROUTE, { exit: 68, stderr: 'ping: sendto: No route to host\n' });
+      await expect(pingName()).rejects.toMatchObject({
+        message: `ping exited with status 68, and its output could not be interpreted as a result: ping: sendto: No route to host (target www.example.com, address ${V4_A}, 2 of 2 addresses tried).`,
+        data: { reason: 'unreachable' },
+      });
+    });
+
+    it('names the one address of a single-address hostname', async () => {
+      setPlatform('darwin');
+      resolvesTo(V4_A);
+      spawnsFollow({ exit: 68, stderr: 'ping: sendto: No route to host\n' });
+      await expect(pingName()).rejects.toMatchObject({
+        message: `ping exited with status 68, and its output could not be interpreted as a result: ping: sendto: No route to host (target www.example.com, address ${V4_A}).`,
+      });
+    });
+
+    it('shares one spawn deadline across addresses, each spawn running on what remains', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] });
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      // count 1 at 1000 ms: ping6 is allowed 1 s + 11 s (its fixed final-reply
+      // wait), ping 1 s + 2 s. The first fails 10 s in, leaving 2 s of the 12.
+      spawnsFollow({ ...PING6_NO_ROUTE, afterMs: 10_000 }, { stdout: PING_BSD });
+      await pingName();
+      expect(spawns().map(([cmd, , timeout]) => [cmd, timeout])).toEqual([
+        ['ping6', 12_000],
+        ['ping', 2000],
+      ]);
+    });
+
+    it('stops when the spawn deadline is spent, naming the last address tried', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] });
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      spawnsFollow({ ...PING6_NO_ROUTE, afterMs: 12_000 }, { stdout: PING_BSD });
+      await expect(pingName()).rejects.toMatchObject({
+        message: `ping6 exited with status 1, and its output could not be interpreted as a result: ping6: UDP connect: No route to host (target www.example.com, address ${V6_A}, 1 of 2 addresses tried).`,
+        data: { reason: 'unreachable' },
+      });
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('traceroute — trying each address', () => {
+    const traceName = () =>
+      run({ mode: 'traceroute', target: 'www.example.com', count: 3, timeoutMs: 3000 });
+
+    it('moves to the next address when traceroute produced no result for one', async () => {
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      spawnsFollow(TRACEROUTE6_NO_ROUTE, { stdout: TRACEROUTE_UNIX });
+      const result = await traceName();
+      expect(spawns().map(([cmd, args]) => [cmd, args.at(-1)])).toEqual([
+        ['traceroute6', V6_A],
+        ['traceroute', V4_A],
+      ]);
+      expect(result).toEqual({
+        mode: 'traceroute',
+        target: 'www.example.com',
+        resolvedIp: V4_A,
+        hops: [
+          { hop: 1, address: '192.168.1.1', rttMs: 1.234 },
+          { hop: 2, address: '*' },
+          { hop: 3, address: '8.8.8.8', rttMs: 11.5 },
+        ],
+      });
+    });
+
+    it('names the last address after every address failed', async () => {
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      spawnsFollow(TRACEROUTE6_NO_ROUTE, {
+        exit: 1,
+        stderr: 'traceroute: sendto: No route to host\n',
+      });
+      await expect(traceName()).rejects.toMatchObject({
+        message: `traceroute exited with status 1, and its output could not be interpreted as a result: traceroute: sendto: No route to host (target www.example.com, address ${V4_A}, 2 of 2 addresses tried).`,
+        data: { reason: 'unreachable' },
+      });
+    });
+
+    it('shares one 60 s spawn deadline across addresses', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] });
+      setPlatform('darwin');
+      resolvesTo(V6_A, V4_A);
+      spawnsFollow({ ...TRACEROUTE6_NO_ROUTE, afterMs: 45_000 }, { stdout: TRACEROUTE_UNIX });
+      await traceName();
+      expect(spawns().map(([cmd, , timeout]) => [cmd, timeout])).toEqual([
+        ['traceroute6', 60_000],
+        ['traceroute', 15_000],
+      ]);
+    });
+  });
+
+  describe('family — one address family', () => {
+    it.each([
+      [4, [V4_A, V4_B]],
+      [6, [V6_A, V6_B]],
+    ] as const)(
+      'family %i probes only that family, filtered after one unfiltered lookup',
+      async (family, hosts) => {
+        resolvesTo(V6_A, V4_A, V6_B, V4_B);
+        socketsFollow(refused(), refused());
+        await run({
+          mode: 'connectivity',
+          target: 'www.example.com',
+          port: 443,
+          count: 3,
+          timeoutMs: 2000,
+          family,
+        });
+        expect(lookupMock).toHaveBeenCalledWith('www.example.com', { all: true });
+        expect(connectedHosts()).toEqual(hosts);
+      },
+    );
+
+    it.each([
+      [6, '8.8.8.8', '8.8.8.8 is not an IPv6 address.'],
+      [4, '2606:4700:4700::1111', '2606:4700:4700::1111 is not an IPv4 address.'],
+    ] as const)(
+      'rejects family %i for an IP literal of the other family as family_mismatch',
+      async (family, target, message) => {
+        await expect(
+          run({ mode: 'connectivity', target, port: 443, count: 3, timeoutMs: 2000, family }),
+        ).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          message,
+          data: { reason: 'family_mismatch' },
+        });
+        expect(lookupMock).not.toHaveBeenCalled();
+        expect(connectMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects a hostname with no address of the family, naming what it resolves to', async () => {
+      resolvesTo(V4_A, V4_B);
+      await expect(
+        run({
+          mode: 'ping',
+          target: 'v4only.example.com',
+          count: 1,
+          timeoutMs: 1000,
+          family: 6,
+        }),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        message: `v4only.example.com has no IPv6 address; it resolves to ${V4_A}, ${V4_B}.`,
+        data: { reason: 'family_mismatch' },
+      });
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+
+    it('filters by family before the private-range gate', async () => {
+      // The name's only IPv6 address is unique-local, so family 6 leaves nothing public.
+      resolvesTo(V4_A, 'fd00::1');
+      await expect(
+        run({
+          mode: 'connectivity',
+          target: 'split.example.com',
+          port: 443,
+          count: 3,
+          timeoutMs: 2000,
+          family: 6,
+        }),
+      ).rejects.toMatchObject({
+        message:
+          'split.example.com has no public IPv6 address; its 1 IPv6 address is private/reserved.',
+        data: { reason: 'private_target_blocked' },
+      });
+      expect(connectMock).not.toHaveBeenCalled();
+    });
+
+    it('ignores family for public_ip', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ ip: '203.0.113.99' })));
+      expect(await run({ mode: 'public_ip', count: 3, timeoutMs: 3000, family: 6 })).toEqual({
+        mode: 'public_ip',
+        publicIp: '203.0.113.99',
+      });
     });
   });
 
