@@ -38,6 +38,14 @@ await createApp({
    * horizontally without them. An explicit MCP_SESSION_MODE still overrides this.
    */
   sessionMode: 'stateless',
+  /**
+   * Sent on every initialize, so it carries what a client that never loads the
+   * skill still needs; the gates and workflows live in the skill itself.
+   */
+  instructions:
+    "Five tools are always available: toolkit_hash_value (digests and HMACs, and constant-time comparison against a published checksum or signature), toolkit_encode_value (base64, base64url, hex, and URL encoding), toolkit_generate_id (UUIDs and ULIDs from the platform CSPRNG), toolkit_generate_qr (QR codes), and toolkit_geolocate_ip. Geolocation is the only one that calls an outside provider, and its per-minute request budgets belong to this server process and are shared by every caller: send several addresses as one batch and reuse results already returned. The tools work on the strings you pass; none reads a file path or fetches a URL, so a path sent as a value is processed as text. Two host diagnostics, toolkit_check_network and toolkit_check_system, register only when the operator starts the server with TOOLKIT_ENABLE_NET_DIAGNOSTICS=true or TOOLKIT_ENABLE_SYSTEM_INFO=true, and they report on the machine this server runs on, not the caller's. The toolkit-guide skill (skill://toolkit-guide/SKILL.md) carries the gates for reading a digest or signature mismatch, webhook and JWT signing inputs, moving digests between encodings, who runs a network, and host diagnostics.",
+  /** Root `skills/`, resolved against the package root and served as skill:// resources. */
+  skills: 'skills',
   tools,
   setup() {
     const serverConfig = getServerConfig();
