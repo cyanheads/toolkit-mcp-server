@@ -77,6 +77,11 @@ describe('tool wire contract', () => {
     ],
     [
       hashValueTool,
+      { value: 'abc', secret: 'k', expected: `sha256-${Buffer.alloc(32).toString('base64')}` },
+      'expected_plain_with_secret',
+    ],
+    [
+      hashValueTool,
       { value: 'abc', algorithm: 'sha1', digestEncoding: 'sri' },
       'sri_unsupported_algorithm',
     ],

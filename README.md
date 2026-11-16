@@ -58,7 +58,7 @@ MCP clients that support the Skills extension read it as `skill://toolkit-guide/
 - `value` read per `inputEncoding` (`utf8` default, `hex`, `base64`); `algorithm` is `sha256` (default), `sha384`, or `sha512`, with `sha1` and `md5` for checksum compatibility and verifying existing HMAC-SHA1 signatures only; `operation` is `generate` or `compare`, and when omitted it compares if `expected` is sent
 - A non-empty `secret` makes the digest an HMAC keyed by it, for webhook signatures (GitHub's `X-Hub-Signature-256` pastes into `expected` as-is) and HS256 JWT signatures; `secretEncoding` is `utf8` (default), `hex`, `base64`, or `base64url` (a JWK `k`). The result then carries `hmac: true`, and the secret is never echoed in the result or an error; a secret invalid for its encoding fails as `invalid_secret_encoding`
 - `generate` returns `digest` in `digestEncoding` (`hex` default, `base64`, unpadded `base64url`, or `sri` for plain SHA-2 digests, where an HMAC fails as `sri_with_secret`) plus `lengthInBytes`; `compare` returns `matches` against `expected`, pasted as published: hex, base64, or base64url, bare or prefixed (`sha256:<digest>`, `sha256=<digest>`); SRI, including a multi-entry npm `integrity` value; or one checksum-file line as `sha256sum`, `shasum`, `md5`, or `openssl dgst` prints it
-- A bad `expected` fails as `expected_malformed` (including a whole multi-line checksum file, with a hint to pass the file's own line), `expected_length_mismatch` (the hint names the algorithm that length fits), or `expected_algorithm_mismatch` (a tag, prefix, or SRI entry naming another algorithm)
+- A bad `expected` fails as `expected_malformed` (including a whole multi-line checksum file, with a hint to pass the file's own line, and hex split by whitespace, with a hint to join it or, for a line naming a file only in hex digits, to pass `<hex> *<file>`), `expected_length_mismatch` (the hint names the algorithm that length fits), `expected_algorithm_mismatch` (a tag, prefix, or SRI entry naming another algorithm), or `expected_plain_with_secret` (an SRI value or a tagged checksum line with `secret`, since both carry plain digests)
 
 ---
 
@@ -218,7 +218,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 - No API key needed — geolocation uses the keyless [ip-api](https://ip-api.com/) free tier by default.
 
 ### Installation

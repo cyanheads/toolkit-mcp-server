@@ -216,6 +216,17 @@ const wireError = async (input: Record<string, unknown>) => {
   return { error, text };
 };
 
+/** The text a caller reads for an error: its message, recovery hint, and reason, in that order. */
+const wireTextOf = (error: {
+  message: string;
+  data: { reason: string; recovery: { hint: string } };
+}) =>
+  [
+    `Error: ${error.message}`,
+    `Recovery: ${error.data.recovery.hint}`,
+    `(reason ${error.data.reason})`,
+  ].join('\n\n');
+
 const digestOf = (algorithm: string, value: string) =>
   createHash(algorithm).update(value, 'utf8').digest();
 
@@ -614,10 +625,145 @@ const HELLO_SHA512_BASE64 =
 const HELLO_SHA1_HEX = 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d';
 const HELLO_MD5_HEX = '5d41402abc4b2a76b9719d911017c592';
 
-/** A compare of "hello": its `matches` verdict, or the reason it fails with. */
-const verdictOf = async (algorithm: string, expected: string): Promise<boolean | string> => {
+const HASH_ALGORITHMS = ['md5', 'sha1', 'sha256', 'sha384', 'sha512'] as const;
+type HashAlgorithm = (typeof HASH_ALGORITHMS)[number];
+const helloHex = (algorithm: HashAlgorithm) => digestOf(algorithm, 'hello').toString('hex');
+
+/** `hex` in space-separated groups of `width` characters, the last one shorter when it falls short. */
+const groupsOf = (hex: string, width: number) =>
+  hex.match(new RegExp(`.{1,${width}}`, 'g'))?.join(' ') as string;
+
+/** `hex` with every other character uppercased, as a hand edit can leave it. */
+const mixedCase = (hex: string) =>
+  hex.replace(/./g, (char, offset: number) => (offset % 2 ? char.toUpperCase() : char));
+
+/**
+ * Text-mode lines for "hello" in a file named only in hex digits, as shasum,
+ * sha256sum, and md5sum (two spaces) and md5 -r (one space) print them, per
+ * algorithm. Under md5 an 8-hex-character name joins to a sha1 digest's
+ * length, so `deadbeef` and `cafe babe` are refusals there instead.
+ */
+const HEX_NAME_LINES: [HashAlgorithm, string, string][] = HASH_ALGORITHMS.flatMap((algorithm) => {
+  const hex = helloHex(algorithm);
+  const names = ['a', '2026', 'cafe', ...(algorithm === 'md5' ? [] : ['deadbeef', 'cafe babe'])];
+  return [
+    ...names.flatMap((name): [HashAlgorithm, string, string][] => [
+      [algorithm, `two spaces, ${name}`, `${hex}  ${name}`],
+      [algorithm, `one space, ${name}`, `${hex} ${name}`],
+    ]),
+    [algorithm, 'a tab, 2026', `${hex}\t2026`],
+    [algorithm, 'uppercase, CAFE', `${hex.toUpperCase()}  CAFE`],
+    [algorithm, 'a leading backslash, 2026', `\\${hex}  2026`],
+  ];
+});
+
+/**
+ * Lines whose file name is only hex digits that each algorithm refuses: a
+ * digest written in pieces, or a line no length rule can tell from one.
+ */
+const HEX_NAME_REFUSALS: [HashAlgorithm, string, string][] = HASH_ALGORITHMS.flatMap(
+  (algorithm) => {
+    const hex = helloHex(algorithm);
+    const others = HASH_ALGORITHMS.filter((other) => other !== algorithm);
+    const longer = HASH_ALGORITHMS.filter((other) => helloHex(other).length > hex.length);
+    const half = hex.length / 2;
+    /** Hex as most tools print it, in uppercase as PowerShell's Get-FileHash prints it, and mixed. */
+    const casings: [string, string][] = [
+      ['digest', hex],
+      ['uppercase digest', hex.toUpperCase()],
+      ['mixed-case digest', mixedCase(hex)],
+    ];
+    const rows: [HashAlgorithm, string, string][] = [
+      ...casings.flatMap(([form, digest]): [HashAlgorithm, string, string][] => [
+        [algorithm, `the ${form} in 8-character groups`, groupsOf(digest, 8)],
+        [algorithm, `the ${form} in two halves`, `${digest.slice(0, half)} ${digest.slice(half)}`],
+        [algorithm, `the ${form} pasted twice`, `${digest}  ${digest}`],
+      ]),
+      [algorithm, 'the digest in 8-character groups after a backslash', `\\${groupsOf(hex, 8)}`],
+      [
+        algorithm,
+        'the digest beside a digest of other data',
+        `${hex} ${digestOf(algorithm, 'world').toString('hex')}`,
+      ],
+      ...others.map((other): [HashAlgorithm, string, string] => [
+        algorithm,
+        `the digest before a file name the length of a ${other} digest`,
+        `${hex}  ${helloHex(other)}`,
+      ]),
+      ...longer.map((other): [HashAlgorithm, string, string] => [
+        algorithm,
+        `a ${other} digest split after ${hex.length} characters`,
+        `${helloHex(other).slice(0, hex.length)} ${helloHex(other).slice(hex.length)}`,
+      ]),
+    ];
+    if (algorithm === 'md5') {
+      for (const name of ['deadbeef', '20261116', 'cafe babe']) {
+        rows.push([
+          algorithm,
+          `the digest before ${name}, which joins to a sha1 digest's length`,
+          `${hex}  ${name}`,
+        ]);
+        rows.push([algorithm, `the digest before ${name} after one space`, `${hex} ${name}`]);
+      }
+    }
+    return rows;
+  },
+);
+
+/**
+ * A line for a file named only in hex digits whose digest belongs to another
+ * algorithm than the call's, as `md5sum 2026` pasted under sha256 is: every
+ * ordered pair of algorithms.
+ */
+const OTHER_DIGEST_HEX_NAME_LINES: [HashAlgorithm, HashAlgorithm, string][] =
+  HASH_ALGORITHMS.flatMap((algorithm) =>
+    HASH_ALGORITHMS.filter((other) => other !== algorithm).map(
+      (other): [HashAlgorithm, HashAlgorithm, string] => [
+        algorithm,
+        other,
+        `${helloHex(other)}  2026`,
+      ],
+    ),
+  );
+
+/**
+ * Every supported digest of "hello" written as hex in pieces: cut once at every
+ * offset, cut at every offset with the rest in 8-character groups, and in equal
+ * groups of every width. 3 forms × 355 offsets (31 + 39 + 63 + 95 + 127).
+ */
+const SPLIT_DIGESTS: string[] = HASH_ALGORITHMS.flatMap((digest) => {
+  const hex = helloHex(digest);
+  return Array.from({ length: hex.length - 1 }, (_, index) => index + 1).flatMap((offset) => [
+    `${hex.slice(0, offset)} ${hex.slice(offset)}`,
+    `${hex.slice(0, offset)} ${groupsOf(hex.slice(offset), 8)}`,
+    groupsOf(hex, offset),
+  ]);
+});
+
+/**
+ * Two whole digests side by side for every ordered pair of algorithms: the
+ * same digest pasted twice, a digest beside one of other data, and that pair
+ * with the second in 8-character groups. 3 forms × 25 pairs.
+ */
+const DIGEST_PAIRS: string[] = HASH_ALGORITHMS.flatMap((first) =>
+  HASH_ALGORITHMS.flatMap((second) => {
+    const other = digestOf(second, 'world').toString('hex');
+    return [
+      `${helloHex(first)} ${helloHex(second)}`,
+      `${helloHex(first)}  ${other}`,
+      `${helloHex(first)} ${groupsOf(other, 8)}`,
+    ];
+  }),
+);
+
+/** A compare of "hello", keyed by `secret` when one is given: its `matches` verdict, or the reason it fails with. */
+const verdictOf = async (
+  algorithm: string,
+  expected: string,
+  secret?: string,
+): Promise<boolean | string> => {
   try {
-    return (await run({ algorithm, value: 'hello', expected })).matches as boolean;
+    return (await run({ algorithm, value: 'hello', expected, secret })).matches as boolean;
   } catch (err) {
     return (err as { data: { reason: string } }).data.reason;
   }
@@ -771,7 +917,9 @@ describe('toolkit_hash_value checksum-line and prefixed expected', () => {
     expect(await verdictOf('sha512', expected)).toBe(true);
   });
 
-  it.each([
+  /** Values that are no digest in any form, so they fail as `expected_malformed` under sha256. */
+  const MALFORMED_EXPECTED: [string, string][] = [
+    ['words', 'not a digest!'],
     ['both base64 alphabets at once', 'LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmC-'],
     ['an unsupported tag', `SHA224 (hello.txt) = ${HELLO_SHA256_HEX}`],
     ['an unsupported prefix', `sha3-256:${HELLO_SHA256_HEX}`],
@@ -780,7 +928,11 @@ describe('toolkit_hash_value checksum-line and prefixed expected', () => {
     ['a prefixed digest with trailing words', `sha256:${HELLO_SHA256_HEX} hello.txt`],
     ['a tagged line with an unreadable digest', 'SHA256 (hello.txt) = not-a-digest!'],
     ['a checksum line with no file name', `\\${HELLO_SHA256_HEX}`],
-  ])('throws expected_malformed for %s', async (_label, expected) => {
+    ['an SRI value holding a non-entry token', `${sri('sha256', 'hello')} garbage`],
+    ['hex groups after a non-hex first token', `x${HELLO_SHA256_HEX.slice(1, 32)} cafe`],
+  ];
+
+  it.each(MALFORMED_EXPECTED)('throws expected_malformed for %s', async (_label, expected) => {
     expect(await verdictOf('sha256', expected)).toBe('expected_malformed');
   });
 
@@ -796,36 +948,174 @@ describe('toolkit_hash_value checksum-line and prefixed expected', () => {
   /** The `expected_malformed` contract recovery, as a caller reads it on the wire. */
   const MALFORMED_RECOVERY =
     'Pass expected as one digest: hex, base64, or base64url, SRI entries such as sha512-<base64>, one line of a checksum file, or a prefixed digest such as sha256:<hex>.';
+  /** Hex in whitespace-separated groups: one digest split apart, or a line no length rule tells from one. */
+  const SPLIT_HEX_ERROR = {
+    code: JsonRpcErrorCode.ValidationError,
+    message:
+      'expected is hex digits in whitespace-separated groups, which this tool reads as one digest split apart, not as a checksum line.',
+    data: {
+      reason: 'expected_malformed',
+      recovery: {
+        hint: 'If expected is one digest split by whitespace, remove the whitespace. If it is a checksum line for a file named only in hex digits, pass its bare digest, or put * before the file name: <hex> *<file>.',
+      },
+    },
+  };
+  const SPLIT_HEX_TEXT = wireTextOf(SPLIT_HEX_ERROR);
   const HELLO_SHA256_HALVES = `${HELLO_SHA256_HEX.slice(0, 32)} ${HELLO_SHA256_HEX.slice(32)}`;
 
   it.each([
-    ['in 8-character groups', 'sha256', HELLO_SHA256_HEX.match(/.{8}/g)?.join(' ') as string],
+    ['in 8-character groups', 'sha256', groupsOf(HELLO_SHA256_HEX, 8)],
     ['in two 32-character halves', 'sha256', HELLO_SHA256_HALVES],
-    // The first half has an md5 digest's length; the second half is still no file name.
     ['in two 32-character halves, under md5', 'md5', HELLO_SHA256_HALVES],
   ])(
-    'refuses hex split %s as expected_malformed on both surfaces, never as a checksum line',
+    'refuses hex split %s as expected_malformed on both surfaces, and the joined digest matches as sha256',
     async (_label, algorithm, expected) => {
       const { error, text } = await wireError({ algorithm, value: 'hello', expected });
+      expect(error).toEqual(SPLIT_HEX_ERROR);
+      expect(text).toBe(SPLIT_HEX_TEXT);
+      expect(await verdictOf('sha256', expected.replace(/\s/g, ''))).toBe(true);
+    },
+  );
+
+  it.each(MALFORMED_EXPECTED)(
+    'keeps the contract recovery for %s on both surfaces',
+    async (_label, expected) => {
+      const { error, text } = await wireError({ value: 'hello', expected });
       expect(error).toEqual({
         code: JsonRpcErrorCode.ValidationError,
-        message: `expected is not a ${algorithm} digest in any form this tool reads (hex, base64, base64url, SRI, a checksum line, or a prefixed digest).`,
+        message:
+          'expected is not a sha256 digest in any form this tool reads (hex, base64, base64url, SRI, a checksum line, or a prefixed digest).',
         data: { reason: 'expected_malformed', recovery: { hint: MALFORMED_RECOVERY } },
       });
-      expect(text).toBe(
-        [
-          `Error: ${error.message}`,
-          `Recovery: ${MALFORMED_RECOVERY}`,
-          '(reason expected_malformed)',
-        ].join('\n\n'),
+      expect(text).toBe(wireTextOf(error));
+    },
+  );
+
+  it('reads a checksum line whose file name is only hex digits as it reads one with a mode marker or a non-hex name', async () => {
+    const other = digestOf('sha256', 'world').toString('hex');
+    for (const name of ['  cafe', ' *cafe', '  cafe.iso']) {
+      expect(await verdictOf('sha256', `${HELLO_SHA256_HEX}${name}`)).toBe(true);
+      expect(await verdictOf('sha256', `${other}${name}`)).toBe(false);
+    }
+  });
+
+  it.each(HEX_NAME_LINES)(
+    'reads, under %s, a line (%s) for a file named only in hex digits as a checksum line',
+    async (algorithm, _label, expected) => {
+      expect(await verdictOf(algorithm, expected)).toBe(true);
+    },
+  );
+
+  it.each(HEX_NAME_REFUSALS)(
+    'refuses, under %s, %s as expected_malformed with the split-hex hint, never as a checksum line',
+    (algorithm, _label, expected) => {
+      expect(errorOf({ algorithm, value: 'hello', expected }).data).toMatchObject(
+        SPLIT_HEX_ERROR.data,
       );
     },
   );
 
-  it('refuses a checksum line whose file name is only hex digits, unless a mode marker precedes it', async () => {
-    expect(await verdictOf('sha256', `${HELLO_SHA256_HEX}  cafe`)).toBe('expected_malformed');
-    expect(await verdictOf('sha256', `${HELLO_SHA256_HEX} *cafe`)).toBe(true);
-    expect(await verdictOf('sha256', `${HELLO_SHA256_HEX}  cafe.iso`)).toBe(true);
+  it('refuses one digest in pieces, and two digests side by side, under every algorithm', async () => {
+    const cases = HASH_ALGORITHMS.flatMap((algorithm) =>
+      [...SPLIT_DIGESTS, ...DIGEST_PAIRS].map((expected) => ({ algorithm, expected })),
+    );
+    // 5 algorithms × (1,065 split digests + 75 pairs).
+    expect(cases).toHaveLength(5700);
+    const admitted: { algorithm: string; expected: string; verdict: boolean | string }[] = [];
+    for (const { algorithm, expected } of cases) {
+      const verdict = await verdictOf(algorithm, expected);
+      if (verdict !== 'expected_malformed') admitted.push({ algorithm, expected, verdict });
+    }
+    expect(admitted).toEqual([]);
+  });
+
+  it.each(OTHER_DIGEST_HEX_NAME_LINES)(
+    'reads, under %s, a %s line for a file named only in hex digits as a length mismatch whose hint leads to a match',
+    async (algorithm, other, expected) => {
+      const error = errorOf({ algorithm, value: 'hello', expected });
+      expect(error.data.reason).toBe('expected_length_mismatch');
+      expect(error.data.recovery.hint).toBe(
+        `expected has the length of a ${other} digest. Retry with algorithm ${other}, or pass a ${algorithm} digest.`,
+      );
+      expect(await verdictOf(other, expected)).toBe(true);
+    },
+  );
+
+  it('fails an md5sum line for a file named only in hex digits under sha256 as it fails one for 2026.iso, on both surfaces', async () => {
+    const expected = `${HELLO_MD5_HEX}  2026`;
+    const { error, text } = await wireError({ value: 'hello', expected });
+    expect(error).toEqual({
+      code: JsonRpcErrorCode.ValidationError,
+      message:
+        'expected is 32 hex characters, but a sha256 digest is 32 bytes (64 hex characters).',
+      data: {
+        reason: 'expected_length_mismatch',
+        recovery: {
+          hint: 'expected has the length of a md5 digest. Retry with algorithm md5, or pass a sha256 digest.',
+        },
+      },
+    });
+    expect(text).toBe(wireTextOf(error));
+    expect(await wireError({ value: 'hello', expected: `${HELLO_MD5_HEX}  2026.iso` })).toEqual({
+      error,
+      text,
+    });
+    expect(await verdictOf('md5', expected)).toBe(true);
+  });
+
+  it.each(HASH_ALGORITHMS)(
+    'reads, under %s, a line for each refused hex-only name once * marks the file name',
+    async (algorithm) => {
+      const hex = helloHex(algorithm);
+      const names = [
+        'deadbeef',
+        '20261116',
+        'cafe babe',
+        ...[24, 56, 88].map((length) => 'a'.repeat(length)),
+        ...HASH_ALGORITHMS.map(helloHex),
+      ];
+      for (const name of names) {
+        expect(await verdictOf(algorithm, `${hex} *${name}`)).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    ['an md5 line for an 8-character name', 'md5', HELLO_MD5_HEX, 'deadbeef'],
+    ['a sha1 line for a 24-character name', 'sha1', HELLO_SHA1_HEX, 'a'.repeat(24)],
+    ['a sha256 line for a name of md5 length', 'sha256', HELLO_SHA256_HEX, HELLO_MD5_HEX],
+  ])(
+    'refuses %s on both surfaces, and both checksum-line escapes in the hint match',
+    async (_label, algorithm, hex, name) => {
+      const { error, text } = await wireError({
+        algorithm,
+        value: 'hello',
+        expected: `${hex}  ${name}`,
+      });
+      expect(error).toEqual(SPLIT_HEX_ERROR);
+      expect(text).toBe(SPLIT_HEX_TEXT);
+      expect(await verdictOf(algorithm, hex)).toBe(true);
+      expect(await verdictOf(algorithm, `${hex} *${name}`)).toBe(true);
+    },
+  );
+
+  it('returns a compare of a checksum line for a file named only in hex digits on both surfaces', async () => {
+    const result = await runToolContract(hashValueTool, {
+      value: 'hello',
+      expected: `${HELLO_SHA256_HEX}  2026`,
+    } as never);
+    expect(result.structuredContent).toEqual({
+      algorithm: 'sha256',
+      operation: 'compare',
+      matches: true,
+    });
+    const text = result.content
+      .filter((block) => block.type === 'text')
+      .map((block) => readCommonMark(block.text))
+      .join('\n');
+    expect(text).toBe(
+      '⟨strong⟩Algorithm:⟨/strong⟩ sha256 | ⟨strong⟩Operation:⟨/strong⟩ compare\n⟨strong⟩Matches:⟨/strong⟩ yes — digest equals expected',
+    );
   });
 
   it.each([
@@ -923,6 +1213,11 @@ const EXPECTED_SHAPES: [string, (n: number) => string][] = [
     'a tagged line holding a long line-break run',
     (n) => `SHA256 (${'  \r\n'.repeat(n / 4)}) = ${HELLO_SHA256_HEX}`,
   ],
+  ['a whole digest then one long hex-only file name', (n) => `${ZERO_SHA256}  ${'a'.repeat(n)}`],
+  [
+    'a whole digest then many one-character hex tokens',
+    (n) => `${ZERO_SHA256}${' a'.repeat(n / 2)}`,
+  ],
 ];
 
 describe('toolkit_hash_value expected parsing CPU time', () => {
@@ -930,28 +1225,35 @@ describe('toolkit_hash_value expected parsing CPU time', () => {
     'stays linear in CPU time on %s',
     (_label, shape) => {
       const ctx = createMockContext({ errors: hashValueTool.errors });
-      const perCall: number[] = [];
-      for (const n of SIZES) {
+      const msAt = (n: number) => {
         const input = hashValueTool.input.parse({
           operation: 'compare',
           value: 'hello',
           expected: shape(n),
         });
-        const ms = cpuMsPerCall(() => {
+        return cpuMsPerCall(() => {
           try {
             hashValueTool.handler(input, ctx);
           } catch {
             // Every shape is unreadable or mismatched; only the time to say so is measured.
           }
         });
+      };
+      const [baseline, ...larger] = SIZES as [number, ...number[]];
+      expect(msAt(baseline)).toBeLessThan(baseline / 1000);
+      for (const n of larger) {
+        const ms = msAt(n);
         // ≤1 µs per character: a linear reading sits far below it at every size,
         // and a quadratic one crosses it before the doubling reaches the largest size.
         expect(ms).toBeLessThan(n / 1000);
-        perCall.push(ms);
+        // Linear time grows with the span (at most 64×), quadratic time with its
+        // square (4096× at the full span). The baseline is re-timed beside each
+        // size, so a change in CPU speed during the run never enters the ratio.
+        expect(ms / msAt(baseline)).toBeLessThan(256);
       }
-      expect((perCall.at(-1) as number) / (perCall[0] as number)).toBeLessThan(256);
     },
-    60_000,
+    // The timing body is synchronous, so a runner timeout could only fail it after it finished.
+    0,
   );
 });
 
@@ -1279,6 +1581,158 @@ describe('toolkit_hash_value HMAC via secret', () => {
       .join('\n');
     expect(text).toBe(
       `⟨strong⟩Algorithm:⟨/strong⟩ sha256 | ⟨strong⟩Operation:⟨/strong⟩ generate | ⟨strong⟩HMAC:⟨/strong⟩ yes, keyed with secret\n⟨strong⟩Digest:⟨/strong⟩ ⟨code_inline:${JWS_SIGNATURE}⟩\n⟨strong⟩Length:⟨/strong⟩ 32 bytes`,
+    );
+  });
+});
+
+/** HMAC-SHA256("hello") keyed by "k", from node:crypto rather than the tool. */
+const HELLO_HMAC_SHA256 = createHmac('sha256', 'k').update('hello').digest();
+const HELLO_HMAC_SHA256_HEX = HELLO_HMAC_SHA256.toString('hex');
+
+/** The `expected_plain_with_secret` hint a caller reads on the wire, naming the call's algorithm. */
+const plainWithSecretHint = (algorithm: string) =>
+  `Drop secret to check the plain digest, or pass the HMAC signature itself as expected, bare or prefixed as ${algorithm}=<hex>.`;
+
+describe('toolkit_hash_value plain-digest expected forms with secret', () => {
+  it.each([
+    ['an SRI value', 'sha256', sri('sha256', 'hello')],
+    ['a multi-entry SRI value', 'sha256', `${sri('sha256', 'hello')} ${sri('sha512', 'hello')}`],
+    [
+      'a newline-separated multi-entry SRI value',
+      'sha256',
+      `${sri('sha256', 'hello')}\n${sri('sha512', 'hello')}`,
+    ],
+    ['an uppercase SRI prefix', 'sha256', `SHA256-${HELLO_SHA256_BASE64}`],
+    ['a shasum --tag line', 'sha256', `SHA256 (hello.txt) = ${HELLO_SHA256_HEX}`],
+    ['a cksum --base64 line', 'sha256', `SHA256 (hello.txt) = ${HELLO_SHA256_BASE64}`],
+    ['an OpenSSL SHA2-256 line', 'sha256', `SHA2-256(hello.txt)= ${HELLO_SHA256_HEX}`],
+    ['a LibreSSL SHA256 line', 'sha256', `SHA256(hello.txt)= ${HELLO_SHA256_HEX}`],
+    ['a GNU escaped tagged line', 'sha256', `\\SHA256 (back\\\\slash.txt) = ${HELLO_SHA256_HEX}`],
+    ['a BSD md5 line', 'md5', `MD5 (hello.txt) = ${HELLO_MD5_HEX}`],
+    ['an OpenSSL SHA2-512 line', 'sha512', `SHA2-512(hello.txt)= ${HELLO_SHA512_HEX}`],
+  ])(
+    'refuses %s with secret as expected_plain_with_secret, and matches it without',
+    async (_label, algorithm, expected) => {
+      expect(await verdictOf(algorithm, expected, 'k')).toBe('expected_plain_with_secret');
+      expect(await verdictOf(algorithm, expected)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['an SRI value naming only sha512', 'expected_algorithm_mismatch', sri('sha512', 'hello')],
+    ['a tag naming sha512', 'expected_algorithm_mismatch', `SHA512 (f) = ${HELLO_SHA512_HEX}`],
+    [
+      'an SRI entry of sha1 length',
+      'expected_length_mismatch',
+      `sha256-${digestOf('sha1', 'hello').toString('base64')}`,
+    ],
+    [
+      'a sha256 tag over a sha1 digest',
+      'expected_length_mismatch',
+      `SHA256 (f) = ${HELLO_SHA1_HEX}`,
+    ],
+    [
+      'an SRI value holding a non-entry token',
+      'expected_malformed',
+      `${sri('sha256', 'hello')} garbage`,
+    ],
+  ])(
+    'refuses %s under sha256 with secret before reading its digest (%s without secret)',
+    async (_label, plainReason, expected) => {
+      expect(await verdictOf('sha256', expected, 'k')).toBe('expected_plain_with_secret');
+      expect(await verdictOf('sha256', expected)).toBe(plainReason);
+    },
+  );
+
+  it.each([
+    ['a signature-header prefix', `sha256=${HELLO_HMAC_SHA256_HEX}`],
+    ['a colon prefix', `sha256:${HELLO_HMAC_SHA256_HEX}`],
+    ['an untagged line', `${HELLO_HMAC_SHA256_HEX}  hello.txt`],
+    ['an openssl dgst -r -hmac line', `${HELLO_HMAC_SHA256_HEX} *hello.txt`],
+    ['an untagged line for a file named only in hex digits', `${HELLO_HMAC_SHA256_HEX}  2026`],
+    ['bare hex', HELLO_HMAC_SHA256_HEX],
+    ['bare base64', HELLO_HMAC_SHA256.toString('base64')],
+    ['bare base64url', HELLO_HMAC_SHA256.toString('base64url')],
+  ])('keeps comparing %s as an HMAC', async (_label, expected) => {
+    expect(await verdictOf('sha256', expected, 'k')).toBe(true);
+  });
+
+  it('reads an SRI value as plain when the secret is empty, and refuses it for any other secret', async () => {
+    const expected = sri('sha256', 'hello');
+    expect(await verdictOf('sha256', expected, '')).toBe(true);
+    // A non-empty secret is used as written, whitespace included.
+    expect(await verdictOf('sha256', expected, ' ')).toBe('expected_plain_with_secret');
+  });
+
+  it('reports an unreadable secret before the form of expected', () => {
+    expect(
+      reasonOf({
+        value: 'hello',
+        secret: 'zz',
+        secretEncoding: 'hex',
+        expected: sri('sha256', 'hello'),
+      }),
+    ).toBe('invalid_secret_encoding');
+  });
+
+  it('never reports sri_with_secret on compare, whatever digestEncoding says', () => {
+    expect(
+      reasonOf({
+        operation: 'compare',
+        value: 'hello',
+        secret: 'k',
+        digestEncoding: 'sri',
+        expected: sri('sha256', 'hello'),
+      }),
+    ).toBe('expected_plain_with_secret');
+  });
+
+  it.each([
+    ['an SRI value', sri('sha256', 'hello')],
+    ['a tagged checksum line', `SHA256 (hello.txt) = ${HELLO_SHA256_HEX}`],
+  ])(
+    'puts %s with secret on the wire as expected_plain_with_secret, never the secret',
+    async (form, expected) => {
+      const input = { value: 'hello', secret: CANARY_SECRET, expected };
+      const { error, text } = await wireError(input);
+      expect(error).toEqual({
+        code: JsonRpcErrorCode.ValidationError,
+        message: `expected is ${form}, which carries a plain digest, and secret makes this an HMAC.`,
+        data: {
+          reason: 'expected_plain_with_secret',
+          recovery: { hint: plainWithSecretHint('sha256') },
+        },
+      });
+      expect(text).toContain(error.message);
+      expect(text).toContain(plainWithSecretHint('sha256'));
+      expect(JSON.stringify(await runToolContract(hashValueTool, input as never))).not.toContain(
+        CANARY_SECRET,
+      );
+    },
+  );
+
+  it.each(['sha512', 'sha384', 'sha1', 'md5'] as const)(
+    'names %s in the hint on both surfaces, and following the hint verbatim with the real HMAC matches',
+    async (algorithm) => {
+      const expected = `${algorithm.toUpperCase()} (hello.txt) = ${helloHex(algorithm)}`;
+      const { error, text } = await wireError({ algorithm, value: 'hello', secret: 'k', expected });
+      expect(error.data).toEqual({
+        reason: 'expected_plain_with_secret',
+        recovery: { hint: plainWithSecretHint(algorithm) },
+      });
+      expect(text).toContain(plainWithSecretHint(algorithm));
+      const prefix = /prefixed as (\w+)=<hex>/.exec(error.data.recovery.hint)?.[1];
+      const hmac = createHmac(algorithm, 'k').update('hello').digest('hex');
+      expect(await verdictOf(algorithm, `${prefix}=${hmac}`, 'k')).toBe(true);
+    },
+  );
+
+  it('advertises the prefix in its contract recovery for any algorithm', () => {
+    expect(
+      hashValueTool.errors?.find((entry) => entry.reason === 'expected_plain_with_secret')
+        ?.recovery,
+    ).toBe(
+      'Drop secret to check the plain digest, or pass the HMAC signature itself as expected, bare or prefixed as <algorithm>=<hex>.',
     );
   });
 });

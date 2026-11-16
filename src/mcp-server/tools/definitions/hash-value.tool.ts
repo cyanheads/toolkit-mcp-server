@@ -36,12 +36,16 @@ function decodeBytes(value: string, encoding: 'utf8' | BinaryEncoding): Buffer |
  * for it); the other kinds name the ways it can fail to be read. `found`
  * describes a mismatched length in the shape's own unit, for the error
  * message; `fits` names the algorithm an unlabeled digest of that length
- * belongs to, when there is one.
+ * belongs to, when there is one. `plainWithSecret` names a form that holds
+ * only plain digests, met on an HMAC compare. `splitHex` is hex in
+ * whitespace-separated groups that `isChecksumLine` does not read as a line.
  */
 type ParsedExpected =
   | { kind: 'digests'; digests: Buffer[] }
   | { kind: 'malformed' }
   | { kind: 'multiline' }
+  | { kind: 'splitHex' }
+  | { kind: 'plainWithSecret'; form: 'an SRI value' | 'a tagged checksum line' }
   | { kind: 'lengthMismatch'; found: string; fits?: Algorithm | undefined }
   | { kind: 'algorithmMismatch'; named: Algorithm[] };
 
@@ -68,13 +72,41 @@ const TAGGED_LINE =
  * An untagged checksum line: `sha256sum`, `shasum`, `md5 -r`, `openssl dgst
  * -r` — a hex digest, spaces or tabs, then a file name (with any `*`, `U`, or
  * `^` mode marker) that is discarded. Hex only, so a run of words is not read
- * as a base64 digest of the wrong length. `parseExpected` also refuses a file
- * name of only hex digits, which is a digest split into groups.
+ * as a base64 digest of the wrong length. A file name of only hex digits has
+ * the shape of a digest split into groups, so `isChecksumLine` decides it.
  */
 const CHECKSUM_LINE = /^\\?([0-9a-fA-F]+)[ \t]+\S/;
 
 /** A run of hex digits and nothing else. */
 const HEX_DIGITS = /^[0-9a-fA-F]+$/;
+
+/** The hex lengths of the supported digests: 32, 40, 64, 96, and 128 characters. */
+const DIGEST_HEX_LENGTHS: ReadonlySet<number> = new Set(
+  ALGORITHMS.map((candidate) => DIGEST_BYTES[candidate] * 2),
+);
+
+/**
+ * Whether a `CHECKSUM_LINE` match is a checksum line, given its hex `digest`
+ * (without any leading `\`) and its file name `name` (the tokens after it). A
+ * name holding anything besides hex digits always is. A name of only hex
+ * digits is one only when `digest` has a supported digest's length and neither
+ * the name's tokens joined nor all the tokens joined have one; otherwise the
+ * line reads as one digest in pieces. The whole-line rule refuses one digest
+ * cut into pieces, which join back to its length (sha512 as 64 + 64, sha1 as
+ * 32 + 8); the name rule refuses a digest pasted twice and two digests side by
+ * side. `digest` need not fit the call's algorithm, so a line for another
+ * algorithm reaches the length check, which names the algorithm it fits. An
+ * md5 line for an 8-character name falls to the whole-line rule too: no length
+ * rule can tell it from sha1 as 32 + 8. The checks are a set lookup on the
+ * digest's length and a sum of token lengths, so they add no pass over the
+ * characters.
+ */
+function isChecksumLine(digest: string, name: string[]): boolean {
+  if (!name.every((token) => HEX_DIGITS.test(token))) return true;
+  if (!DIGEST_HEX_LENGTHS.has(digest.length)) return false;
+  const nameLength = name.reduce((sum, token) => sum + token.length, 0);
+  return !DIGEST_HEX_LENGTHS.has(nameLength) && !DIGEST_HEX_LENGTHS.has(digest.length + nameLength);
+}
 
 /** A prefixed digest: `sha256:<digest>` (OCI, release assets) or `sha256=<digest>` (signature headers). */
 const PREFIXED = /^(md5|sha1|sha256|sha384|sha512)[:=][ \t]*(\S+)$/i;
@@ -157,24 +189,31 @@ function readSri(tokens: string[], algorithm: Algorithm): ParsedExpected {
 /**
  * Read a trimmed `expected`, first form that fits: SRI (when the first token
  * is an entry); a line break (a whole checksum file, refused); a tagged
- * checksum line; an untagged checksum line whose file name is not only hex
- * digits; a prefixed digest; a bare digest. Every pattern here runs over
- * caller text with no length cap, so each pairs adjacent quantifiers over
- * disjoint classes and stays linear.
+ * checksum line; an untagged checksum line, as `isChecksumLine` reads one,
+ * the hex groups it refuses being split hex; a prefixed digest; a bare digest.
+ * On an HMAC compare (`hmac`), SRI and a tagged line are refused before their
+ * digest is read: both forms come only from plain-hash tools, while `openssl
+ * dgst -hmac` tags its lines `HMAC-`, which the tagged pattern never matches.
+ * Every pattern here runs over caller text with no length cap, so each pairs
+ * adjacent quantifiers over disjoint classes and stays linear.
  */
-function parseExpected(expected: string, algorithm: Algorithm): ParsedExpected {
+function parseExpected(expected: string, algorithm: Algorithm, hmac: boolean): ParsedExpected {
   const tokens = expected.split(/\s+/);
-  if (SRI_ENTRY.test(tokens[0] as string)) return readSri(tokens, algorithm);
+  if (SRI_ENTRY.test(tokens[0] as string)) {
+    return hmac ? { kind: 'plainWithSecret', form: 'an SRI value' } : readSri(tokens, algorithm);
+  }
   if (/[\r\n]/.test(expected)) return { kind: 'multiline' };
   const tagged = TAGGED_LINE.exec(expected);
   if (tagged) {
+    if (hmac) return { kind: 'plainWithSecret', form: 'a tagged checksum line' };
     return readDigest(tagged[2] as string, algorithm, algorithmNamed(tagged[1] as string));
   }
   const line = CHECKSUM_LINE.exec(expected);
-  // Hex in whitespace-separated groups also fits the line; reading its first
-  // group as the digest would answer for a fragment of the value.
-  if (line && !tokens.slice(1).every((token) => HEX_DIGITS.test(token))) {
-    return readDigest(line[1] as string, algorithm);
+  if (line) {
+    const digest = line[1] as string;
+    return isChecksumLine(digest, tokens.slice(1))
+      ? readDigest(digest, algorithm)
+      : { kind: 'splitHex' };
   }
   const prefixed = PREFIXED.exec(expected);
   if (prefixed) {
@@ -186,7 +225,7 @@ function parseExpected(expected: string, algorithm: Algorithm): ParsedExpected {
 export const hashValueTool = tool('toolkit_hash_value', {
   title: 'toolkit-mcp-server: hash value',
   description:
-    'Generate a cryptographic digest or HMAC of a value, or verify a value against an expected digest. Set operation to "generate" for a digest, or "compare" to constant-time-check value against the expected digest — compare is timing-safe and avoids manual string equality checks. Omitting operation compares when expected is supplied and generates otherwise. Algorithm defaults to sha256; sha384 and sha512 are also secure, while md5 and sha1 are exposed ONLY for checksum and file-integrity compatibility and for verifying existing HMAC-SHA1 signatures, and must not be used for passwords, new signatures, or any other security purpose. Set secret to compute HMAC(algorithm, secret, value) instead of a plain digest, for generate and compare alike — the check behind webhook signatures such as GitHub\'s X-Hub-Signature-256 (pass the header value as expected) and HS256 JWT signatures; secretEncoding says how secret is written (utf8 default, hex, base64, or base64url for a JWK k), the result carries hmac: true, and the secret is never echoed back. digestEncoding selects the generated digest form: lowercase hex (default), base64, base64url (unpadded, the JWS signature form), or sri (<algorithm>-<base64>, the npm lockfile integrity and Subresource Integrity form, sha256/sha384/sha512 only, plain digests only). expected is recognized by its shape at the algorithm\'s digest length, so a published checksum can be pasted as-is: a bare hex, base64, or base64url digest; SRI, which may hold several space-separated entries as an npm integrity field can and matches when any entry for algorithm does; one checksum-file line as sha256sum, shasum, md5, or openssl dgst prints it (<hex>  <file>, or SHA256 (<file>) = <digest>); or a digest prefixed sha256: or sha256= (OCI and release-asset digests, webhook signature headers). A tag or prefix naming another algorithm fails rather than being ignored, and a multi-line checksum file must be cut to the one line for the file. inputEncoding controls how value is read before hashing (utf8 default, or hex/base64 for raw binary data) so binary blobs need no decode round-trip. The canonical use is matching a download against a vendor-published checksum or a lockfile integrity entry.',
+    'Generate a cryptographic digest or HMAC of a value, or verify a value against an expected digest. Set operation to "generate" for a digest, or "compare" to constant-time-check value against the expected digest — compare is timing-safe and avoids manual string equality checks. Omitting operation compares when expected is supplied and generates otherwise. Algorithm defaults to sha256; sha384 and sha512 are also secure, while md5 and sha1 are exposed ONLY for checksum and file-integrity compatibility and for verifying existing HMAC-SHA1 signatures, and must not be used for passwords, new signatures, or any other security purpose. Set secret to compute HMAC(algorithm, secret, value) instead of a plain digest, for generate and compare alike — the check behind webhook signatures such as GitHub\'s X-Hub-Signature-256 (pass the header value as expected) and HS256 JWT signatures; secretEncoding says how secret is written (utf8 default, hex, base64, or base64url for a JWK k), the result carries hmac: true, and the secret is never echoed back. digestEncoding selects the generated digest form: lowercase hex (default), base64, base64url (unpadded, the JWS signature form), or sri (<algorithm>-<base64>, the npm lockfile integrity and Subresource Integrity form, sha256/sha384/sha512 only, plain digests only). expected is recognized by its shape at the algorithm\'s digest length, so a published checksum can be pasted as-is: a bare hex, base64, or base64url digest; SRI, which may hold several space-separated entries as an npm integrity field can and matches when any entry for algorithm does; one checksum-file line as sha256sum, shasum, md5, or openssl dgst prints it (<hex>  <file>, or SHA256 (<file>) = <digest>); or a digest prefixed sha256: or sha256= (OCI and release-asset digests, webhook signature headers). A tag or prefix naming another algorithm fails rather than being ignored, a multi-line checksum file must be cut to the one line for the file, and with secret an SRI value or a tagged line fails, since both carry plain digests. inputEncoding controls how value is read before hashing (utf8 default, or hex/base64 for raw binary data) so binary blobs need no decode round-trip. The canonical use is matching a download against a vendor-published checksum or a lockfile integrity entry.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
     operation: z
@@ -214,7 +253,7 @@ export const hashValueTool = tool('toolkit_hash_value', {
       .string()
       .optional()
       .describe(
-        'HMAC key. When non-empty, the digest is HMAC(algorithm, secret, value) instead of a plain hash, for generate and compare alike. Read per secretEncoding and used exactly as sent, never trimmed; an empty string counts as absent. Never echoed in the result or in error messages.',
+        'HMAC key. When non-empty, the digest is HMAC(algorithm, secret, value) instead of a plain hash, for generate and compare alike, so a compare then takes the HMAC itself as expected: an SRI value or a tagged checksum line carries a plain digest and is rejected. Read per secretEncoding and used exactly as sent, never trimmed; an empty string counts as absent. Never echoed in the result or in error messages.',
       ),
     secretEncoding: z
       .enum(['utf8', 'hex', 'base64', 'base64url'])
@@ -226,7 +265,7 @@ export const hashValueTool = tool('toolkit_hash_value', {
       .string()
       .optional()
       .describe(
-        'The digest to compare against, recognized from its shape at the algorithm\'s digest length: hex (any case), standard base64, or base64url, bare or prefixed as <algorithm>:<digest> or <algorithm>=<digest>; SRI (<algorithm>-<base64>); or one checksum-file line, <hex>  <file> (sha256sum, shasum, md5 -r) or SHA256 (<file>) = <digest> (BSD, --tag, openssl dgst). A string of only hex digits is always read as hex; hex split by whitespace is rejected, as is a <hex>  <file> line whose file name is only hex digits. An SRI value may carry several space-separated entries: entries for other algorithms are skipped, and it matches when any entry for algorithm matches. A tag or prefix naming another algorithm is rejected, as is a whole multi-line checksum file. Supplying it with operation omitted runs a compare; it is rejected with operation "generate".',
+        'The digest to compare against, recognized from its shape at the algorithm\'s digest length: hex (any case), standard base64, or base64url, bare or prefixed as <algorithm>:<digest> or <algorithm>=<digest>; SRI (<algorithm>-<base64>); or one checksum-file line, <hex>  <file> (sha256sum, shasum, md5 -r) or SHA256 (<file>) = <digest> (BSD, --tag, openssl dgst). A string of only hex digits is always read as hex, and hex split by whitespace is rejected. A <hex>  <file> line whose file name is only hex digits is read as a line only when <hex> has a supported digest\'s length (32, 40, 64, 96, or 128 characters) and neither the name nor <hex> plus the name, whitespace removed, has one; otherwise it reads as split hex and is rejected, as an md5 line for an 8-character name is (pass its bare digest, or put * before the name). An SRI value may carry several space-separated entries: entries for other algorithms are skipped, and it matches when any entry for algorithm matches. A tag or prefix naming another algorithm is rejected, as is a whole multi-line checksum file, and with a non-empty secret so are SRI and a tagged line, which carry plain digests. Supplying it with operation omitted runs a compare; it is rejected with operation "generate".',
       ),
     inputEncoding: z
       .enum(['utf8', 'hex', 'base64'])
@@ -305,6 +344,13 @@ export const hashValueTool = tool('toolkit_hash_value', {
       when: 'expected names an algorithm other than the chosen one, in a checksum-line tag, an <algorithm>: or <algorithm>= prefix, or SRI entries none of which names the chosen algorithm.',
       recovery:
         'Set algorithm to the one expected names, or pass a digest made with the chosen algorithm.',
+    },
+    {
+      reason: 'expected_plain_with_secret',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'operation is "compare", a secret was supplied, and expected is an SRI value or a tagged checksum line (SHA256 (<file>) = <digest>), forms that carry plain digests, not HMACs.',
+      recovery:
+        'Drop secret to check the plain digest, or pass the HMAC signature itself as expected, bare or prefixed as <algorithm>=<hex>.',
     },
     {
       reason: 'sri_unsupported_algorithm',
@@ -387,7 +433,18 @@ export const hashValueTool = tool('toolkit_hash_value', {
       if (expected === undefined) {
         throw ctx.fail('missing_expected');
       }
-      const parsed = parseExpected(expected, algorithm);
+      const parsed = parseExpected(expected, algorithm, hmac);
+      if (parsed.kind === 'plainWithSecret') {
+        throw ctx.fail(
+          'expected_plain_with_secret',
+          `expected is ${parsed.form}, which carries a plain digest, and secret makes this an HMAC.`,
+          {
+            recovery: {
+              hint: `Drop secret to check the plain digest, or pass the HMAC signature itself as expected, bare or prefixed as ${algorithm}=<hex>.`,
+            },
+          },
+        );
+      }
       if (parsed.kind === 'malformed') {
         throw ctx.fail(
           'expected_malformed',
@@ -401,6 +458,17 @@ export const hashValueTool = tool('toolkit_hash_value', {
           {
             recovery: {
               hint: 'Pass only the line for this file from the checksum file, or just its digest.',
+            },
+          },
+        );
+      }
+      if (parsed.kind === 'splitHex') {
+        throw ctx.fail(
+          'expected_malformed',
+          'expected is hex digits in whitespace-separated groups, which this tool reads as one digest split apart, not as a checksum line.',
+          {
+            recovery: {
+              hint: 'If expected is one digest split by whitespace, remove the whitespace. If it is a checksum line for a file named only in hex digits, pass its bare digest, or put * before the file name: <hex> *<file>.',
             },
           },
         );

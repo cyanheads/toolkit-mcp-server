@@ -4,7 +4,7 @@ description: Gates for the toolkit_* tools. Use when checking a download checksu
 license: Apache-2.0
 metadata:
   author: cyanheads
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -48,7 +48,7 @@ Other published forms:
 
 **Secret encoding.** A secret supplied as hex, base64, or base64url needs `secretEncoding`. Otherwise the HMAC is keyed on the text of the encoding.
 
-**Pass only the signature token as `expected`.** The tool accepts `<algorithm>:` and `<algorithm>=` prefixes and a single checksum-file line. Strip other wrappers yourself: Stripe's `t=…,v1=` and Slack's `v0=`.
+**Pass only the signature token as `expected`.** The tool accepts `<algorithm>:` and `<algorithm>=` prefixes and a single untagged checksum-file line (`<hex> *<file>`, as `openssl dgst -r -hmac` prints it). With `secret`, an SRI value or a tagged line (`SHA256 (<file>) = …`) fails, since those forms carry plain digests. Strip other wrappers yourself: Stripe's `t=…,v1=` and Slack's `v0=`.
 
 **Secrets travel to the server.** `secret` and `value` go to whichever server this connection reaches. On a remote instance, use a test secret, or ask the user before sending a production signing secret. A local install keeps the secret on the machine.
 
