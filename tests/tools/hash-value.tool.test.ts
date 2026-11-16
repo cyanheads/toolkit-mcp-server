@@ -659,7 +659,8 @@ const HEX_NAME_LINES: [HashAlgorithm, string, string][] = HASH_ALGORITHMS.flatMa
 
 /**
  * Lines whose file name is only hex digits that each algorithm refuses: a
- * digest written in pieces, or a line no length rule can tell from one.
+ * digest written in pieces, a line no length rule can tell from one, or a line
+ * whose first token has no supported digest's length.
  */
 const HEX_NAME_REFUSALS: [HashAlgorithm, string, string][] = HASH_ALGORITHMS.flatMap(
   (algorithm) => {
@@ -695,6 +696,8 @@ const HEX_NAME_REFUSALS: [HashAlgorithm, string, string][] = HASH_ALGORITHMS.fla
         `a ${other} digest split after ${hex.length} characters`,
         `${helloHex(other).slice(0, hex.length)} ${helloHex(other).slice(hex.length)}`,
       ]),
+      [algorithm, 'the digest one character short before 2026', `${hex.slice(0, -1)}  2026`],
+      [algorithm, 'deadbeef before 2026', 'deadbeef  2026'],
     ];
     if (algorithm === 'md5') {
       for (const name of ['deadbeef', '20261116', 'cafe babe']) {
