@@ -1,12 +1,13 @@
 /**
  * @fileoverview Server startup from the entry module: configuration failures pass
  * through the framework configuration banner, a clean start serves the session
- * instructions and the published skill tree, and the two gate flags decide
- * which tools tools/list carries (fail-closed: both gated tools absent unless
- * enabled).
+ * instructions and the published skill tree, the two gate flags decide which
+ * tools tools/list carries (fail-closed: both gated tools absent unless
+ * enabled), and the opt-in failure-payload log redacts `secret`.
  * @module tests/services/startup-config.test
  */
 import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
@@ -21,8 +22,9 @@ type RpcResponse = { id: number; result?: Record<string, unknown>; error?: unkno
 
 /**
  * Spawns the server over stdio, with `env` laid over the inherited environment,
- * and returns a JSON-RPC client bound to it. A pending request rejects,
- * carrying stderr, if the process exits first.
+ * and returns a JSON-RPC client bound to it plus the stderr it has written. A
+ * pending request or stderr wait rejects, carrying stderr, if the process exits
+ * first.
  */
 function startStdioServer(env: Record<string, string> = {}) {
   const child = spawn('bun', [entry], {
@@ -30,15 +32,18 @@ function startStdioServer(env: Record<string, string> = {}) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stderr = '';
+  /** Re-checked on every stderr chunk until each finds its line. */
+  const stderrWaits = new Set<{ check: () => void; reject: (e: Error) => void }>();
   child.stderr.on('data', (chunk: Buffer) => {
     stderr += chunk.toString();
+    for (const wait of stderrWaits) wait.check();
   });
   const waiting = new Map<
     number,
     { resolve: (r: RpcResponse) => void; reject: (e: Error) => void }
   >();
   child.once('exit', (code) => {
-    for (const { reject } of waiting.values())
+    for (const { reject } of [...waiting.values(), ...stderrWaits])
       reject(new Error(`server exited (${code}): ${stderr}`));
   });
   createInterface({ input: child.stdout }).on('line', (line) => {
@@ -49,6 +54,35 @@ function startStdioServer(env: Record<string, string> = {}) {
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
   return {
     child,
+    /** Everything the process has written to stderr so far. */
+    stderr: () => stderr,
+    /**
+     * The first complete stderr line `match` accepts, checked as each chunk
+     * arrives. Rejects after `timeoutMs`, or if the process exits first.
+     */
+    waitForStderrLine: (match: (line: string) => boolean, timeoutMs: number) =>
+      new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          stderrWaits.delete(wait);
+          reject(new Error(`no matching stderr line within ${timeoutMs} ms: ${stderr}`));
+        }, timeoutMs);
+        const wait = {
+          check: () => {
+            // The text after the last newline may be a line still being written.
+            const line = stderr.split('\n').slice(0, -1).find(match);
+            if (line === undefined) return;
+            clearTimeout(timer);
+            stderrWaits.delete(wait);
+            resolve(line);
+          },
+          reject: (error: Error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        };
+        stderrWaits.add(wait);
+        wait.check();
+      }),
     notify: (method: string) => send({ method }),
     request: (id: number, method: string, params: Record<string, unknown> = {}) =>
       new Promise<RpcResponse>((resolve, reject) => {
@@ -157,3 +191,49 @@ it.each([
   },
   20_000,
 );
+
+const FAILURE_PAYLOAD_MSG = 'Tool failure payload: toolkit_hash_value';
+/** A secret nothing else the server writes contains, so finding it on stderr is a leak. */
+const PROBE_SECRET = 'zz-PROBE-secret-4c1d';
+
+it('redacts secret from the failure-payload record of a failed toolkit_hash_value call', async () => {
+  // The framework logger writes no stderr sink under the NODE_ENV=test the runner sets.
+  const server = startStdioServer({ LOG_TOOL_FAILURE_PAYLOADS: 'true', NODE_ENV: 'production' });
+  try {
+    await server.request(1, 'initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'startup-config-test', version: '0.0.0' },
+    });
+    server.notify('notifications/initialized');
+    const call = await server.request(2, 'tools/call', {
+      name: 'toolkit_hash_value',
+      arguments: { value: 'hello', secret: PROBE_SECRET, expected: 'not a digest!' },
+    });
+    expect(call.result).toMatchObject({
+      isError: true,
+      structuredContent: { error: { data: { reason: 'expected_malformed' } } },
+    });
+    // The record is written before the response, but the log sink can flush it after.
+    const line = await server.waitForStderrLine(
+      (text) => text.includes(`"msg":"${FAILURE_PAYLOAD_MSG}"`),
+      10_000,
+    );
+    const record = JSON.parse(line) as { msg: string; toolInput: string };
+    expect(record.msg).toBe(FAILURE_PAYLOAD_MSG);
+    expect(record.toolInput).toContain('"secret":"[REDACTED]"');
+    expect(JSON.parse(record.toolInput)).toEqual({
+      value: 'hello',
+      secret: '[REDACTED]',
+      expected: 'not a digest!',
+    });
+    // Every record the process writes, up to its exit, keeps the value out.
+    server.child.kill();
+    await once(server.child, 'close');
+    expect(server.stderr()).toContain(FAILURE_PAYLOAD_MSG);
+    expect(server.stderr()).not.toContain(PROBE_SECRET);
+    expect(JSON.stringify(call)).not.toContain(PROBE_SECRET);
+  } finally {
+    server.child.kill();
+  }
+}, 20_000);
